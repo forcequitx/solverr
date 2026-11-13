@@ -1,0 +1,96 @@
+---
+title: Payment mistakes
+icon: alert
+description: The ten most common crypto payment mistakes, how the checkout prevents each one before the customer sends, and what happens if one occurs anyway.
+---
+
+Nobody can reverse a crypto transfer once it is sent: not Solverr, not NEAR Intents and not you as the business. The checkout therefore blocks mistakes in the amount, address, network, coin and memo before the customer sends anything. Each section below says how a mistake is prevented and what happens if it occurs.
+
+## 1. The customer sends the wrong amount
+
+**How it is prevented.** The checkout shows "Send exactly" with the exact coin amount and its symbol, and a **Copy amount** button. Wallet payments fill in the amount automatically. Customers who send from an exchange are reminded to add the exchange's withdrawal fee, so the exact amount arrives.
+
+**If it happens.**
+
+- **Too little.** The invoice becomes `underpaid`, and the checkout shows "The amount was too low" with the amount sent and the amount needed. NEAR Intents returns what was sent, minus a small refund fee, to the customer's refund address. When the refund arrives, the invoice becomes `refunded`, and the customer can select **Try again** if the payment is still open.
+- **Too much.** The payment completes normally, and NEAR Intents returns the extra to the customer.
+
+## 2. The customer sends to the wrong address
+
+**How it is prevented.** Wallet payments build the transfer themselves, so nothing is typed. Manual payments show a QR code and a copy button, and the checkout reminds the customer to copy the address from the checkout page only. Each address works for one payment and is never listed anywhere else, which protects against lookalike addresses.
+
+**If it happens.** The money never reaches NEAR Intents, so nobody can recover it.
+
+## 3. The right coin on the wrong network
+
+For example, the customer sends USDT on Ethereum while the checkout asked for USDT on TRON.
+
+**How it is prevented.**
+
+- The customer chooses the network first and then a coin from that network's list, such as "Coins on TRON". The payment step names both, for example "USDT on TRON", and a manual payment shows "on TRON only" under the amount.
+- Before a manual payment address appears, the customer must tick "I'm sending USDT on the TRON network. Coins sent on any other network do not reach this payment and may be lost."
+- QR codes and mobile wallet links include the network, so many wallets refuse to send on the wrong one.
+- EVM wallet payments switch the wallet to the right network before the customer signs.
+
+**If it happens.** The customer reports it on the help page. Solverr opens a support case with everything NEAR Intents support needs: the transaction hash, the network used, the payment address and the quote details. If the network the customer names differs from the quote's, Solverr marks the case as wrong network (see [Support cases](/docs/help/support-cases)).
+
+## 4. A different coin on the right network
+
+**How it is prevented.** Each payment address accepts one coin. The checkout shows the coin's name and logo, and wallet payments always send the quoted coin.
+
+**If it happens.** The customer opens a support case on the help page, as for the wrong network.
+
+## 5. The memo is missing
+
+Stellar deposits need a memo with the transfer.
+
+**How it is prevented.** When a payment needs a memo, the checkout shows it in large type with its own copy button and a red warning: "This payment needs a memo. Without it, the payment can be lost." Payments that need a memo are always sent manually, and the address appears only after the customer ticks "I've entered the memo in my wallet."
+
+**If it happens.** The payment stays at "Waiting". The customer opens a support case on the help page, and the report includes the memo.
+
+## 6. The customer pays late
+
+**How it is prevented.** Each payment address is valid for 20 minutes and shows a countdown. When the time runs out, the checkout removes the old address and QR code and shows "This address expired. Do not send to it." The customer selects **Get a new address** to continue. Selecting **Change coin** also removes the old address from the screen.
+
+**If it happens.** Solverr keeps watching old addresses for 24 hours.
+
+- If the payment succeeds, the invoice becomes `paid` with `late: true`, even if it had expired, and you get `invoice.paid`.
+- If NEAR Intents refunds it, the money goes back to the customer's refund address.
+- If it seems stuck, the customer opens a support case on the help page.
+
+## 7. The customer paid twice
+
+**How it is prevented.** As soon as the first payment is seen, the checkout replaces the address with "Payment detected" and the notice "Your payment was detected. Do not send it again."
+
+**If it happens.** If a second payment also succeeds, the invoice gets `extra_payment: true`, and you get an `invoice.extra_payment` webhook and a dashboard alert. To return the money, select **Refund this extra payment** next to that payment on the invoice's page in **Dashboard → Payments** (see [Refunds](/docs/payments/refunds)).
+
+## 8. The refund address is wrong
+
+**How it is prevented.**
+
+- The refund address is checked against the format of its network, including checksums where the network has them.
+- On XRP Ledger, Stellar and TON, the checkout asks for a personal wallet address, because exchange addresses there need a memo that refunds cannot include.
+- Wallet payments use the connected wallet as the refund address, so nothing is typed.
+
+**If it happens.** A refund sent to a wrong address cannot be reversed. The customer should check the address before selecting **Show payment address**.
+
+## 9. Your payout wallet is wrong
+
+**How it is prevented.**
+
+- You cannot type a payout address. You connect your wallet and sign a message, so only a wallet you control can receive your money.
+- Payout networks are limited to those where you can verify a wallet by signature.
+- A $1 payment link that you pay yourself shows the money arriving in your wallet before customers pay.
+- Every payout wallet change needs a signature from the new wallet, given now or at your earlier sign-in with it. Once setup is finished, each change shows a dashboard alert, plus an email when email is configured.
+
+**If it happens.** The alert lets you react at once to a change you did not make (see [Settlement](/docs/payments/settlement)).
+
+## 10. Your webhook endpoint is down
+
+**How it is prevented.** Before you take real orders, select **Send ping event** in **Dashboard → Developers** to check that your endpoint receives events.
+
+**If it happens.** Solverr makes up to 9 attempts (8 retries) to deliver each event over about 2.7 days. Meanwhile, the invoice still shows as paid in the dashboard and the API. Each delivery has a **Resend** button, and you get a dashboard alert after the last failed attempt (see [Retries](/docs/webhooks/retries)).
+
+## When NEAR Intents is slow
+
+If NEAR Intents is slow or down, the checkout and dashboard show "Payments are slower than usual right now". Solverr keeps following every payment, and each one continues as soon as NEAR Intents recovers. Payments between networks can take a few minutes even when everything runs normally.

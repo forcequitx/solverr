@@ -1,0 +1,152 @@
+---
+title: PHP SDK
+icon: package
+description: Use solverr/solverr-php to create invoices, links, refunds and payouts from a PHP server, verify webhooks, and handle errors, retries and idempotency.
+---
+
+`solverr/solverr-php` is the Solverr API client for PHP servers. It covers invoices, payment links, refunds, payouts, subscriptions, credits and the list of accepted coins, and verifies webhooks. Requests and responses are plain PHP arrays with the API's own field names, such as `order_id` and `checkout_url`, so the [API reference](/docs/api) applies as written.
+
+## Install
+
+```bash
+composer require solverr/solverr-php
+```
+
+The package needs PHP 8.3 or later with the `curl` and `json` extensions, and has no other dependencies.
+
+## Create an invoice
+
+```php
+<?php
+
+require __DIR__ . '/vendor/autoload.php';
+
+$solverr = new Solverr\Client([
+    'api_key' => getenv('SOLVERR_SECRET_KEY'), // sk_live_…
+    'base_url' => getenv('SOLVERR_URL'),       // https://your-solverr-host
+]);
+
+$invoice = $solverr->invoices->create([
+    'amount' => '25.00',
+    'currency' => 'USD',
+    'order_id' => '1042',
+    'redirect_url' => 'https://shop.example/thanks',
+]);
+
+header('Location: ' . $invoice['checkout_url'], true, 303);
+```
+
+Keep the API key on your server only. Leave out `base_url` when the `SOLVERR_URL` environment variable is set. The base URL must use `https`; plain `http` is accepted only for `localhost`, `127.0.0.1` and `[::1]`.
+
+`invoices->create` also accepts four optional fields: `description`; `customer_email`, the address that gets the receipt; `metadata`, up to 20 string keys and values returned on the invoice; and `expires_in`, the invoice lifetime in seconds, from 900 to 86400 (default 3600).
+
+## Confirm payment with a webhook
+
+Pass the raw request body to `verify` exactly as it arrived. JSON that was decoded and encoded again no longer matches the signature.
+
+```php
+<?php
+
+require __DIR__ . '/vendor/autoload.php';
+
+use Solverr\Exception\WebhookVerificationException;
+use Solverr\Webhook;
+
+try {
+    $event = Webhook::verify(
+        file_get_contents('php://input'),
+        getallheaders(),
+        getenv('SOLVERR_WEBHOOK_SECRET'),
+    );
+} catch (WebhookVerificationException $error) {
+    http_response_code(400);
+    echo $error->getMessage();
+    exit;
+}
+
+if ($event['type'] === 'invoice.paid') {
+    markOrderPaid($event['data']['invoice']['order_id']);
+}
+http_response_code(200);
+```
+
+`SOLVERR_WEBHOOK_SECRET` holds the signing secret from **Dashboard → Developers**. `Webhook::verify` rejects events more than 300 seconds older or newer than now. Its fourth argument changes that window, in seconds.
+
+In Laravel or Symfony, pass `$request->getContent()` as the body and `$request->headers->all()` as the headers. With PSR-7, pass `(string) $request->getBody()` and `$request->getHeaders()`. [Verify signatures](/docs/webhooks/verify-signatures) explains what `verify` checks.
+
+## Grant access once per paid invoice
+
+Call `invoices->redeem($id)` before you deliver a download or open paid content. It marks the paid invoice as used, so one payment cannot be used twice.
+
+```php
+use Solverr\Exception\ApiException;
+
+try {
+    $solverr->invoices->redeem($invoiceId);
+    // deliver the content
+} catch (ApiException $error) {
+    if ($error->status === 409) {
+        // $error->type is "invalid_state" (not paid) or "already_redeemed"
+    }
+}
+```
+
+## Resources
+
+| Call | Endpoint |
+|---|---|
+| `invoices->create($params, ['idempotency_key' => …])` | `POST /api/v1/invoices` |
+| `invoices->retrieve($id)` | `GET /api/v1/invoices/:id` |
+| `invoices->list(['limit' => …, 'starting_after' => …, 'status' => …])` | `GET /api/v1/invoices` |
+| `invoices->listAll($params)` | Generator over every matching invoice, fetching the next page as the loop goes on |
+| `invoices->redeem($id)` | `POST /api/v1/invoices/:id/redeem` |
+| `paymentLinks->create(['title', 'amount'?, 'currency', 'redirect_url'?])`, `paymentLinks->list()` | `/api/v1/payment-links` |
+| `paymentLinks->deactivate($id)` | `DELETE /api/v1/payment-links/:id` |
+| `refunds->create(['invoice_id', 'payment_id'?, 'amount'?])`, `refunds->retrieve($id)`, `refunds->list()`, `refunds->cancel($id)` | `/api/v1/refunds` |
+| `payouts->create(['recipient', 'asset_id', 'amount'])`, `payouts->retrieve($id)`, `payouts->list()`, `payouts->cancel($id)` | `/api/v1/payouts` |
+| `payouts->createBatch(['payouts' => [['recipient', 'asset_id', 'amount'], …]])` | `POST /api/v1/payouts/batch` |
+| `subscriptions->create(['customer_email', 'amount', 'currency', 'interval', 'description'?])`, `subscriptions->list()` | `/api/v1/subscriptions` |
+| `subscriptions->cancel($id)` | `DELETE /api/v1/subscriptions/:id` |
+| `credits->topup(['amount', 'currency' => 'USD', 'credit_account_id'?])` | `POST /api/v1/credits/topup` |
+| `credits->charge(['token', 'amount', 'currency'?, 'description'?])` | `POST /api/v1/credits/charge` |
+| `credits->refundCharge($id)` | `POST /api/v1/credits/charges/:id/refund` |
+| `tokens->list()` | `GET /api/v1/tokens` |
+| `webhooks->sendTest()` | `POST /api/v1/webhooks/test` |
+| `Webhook::verify($rawBody, $headers, $secret, $tolerance = 300)` | Local check, no request |
+
+Every `create`, `createBatch`, `topup`, `charge`, `refundCharge` and `redeem` call, and `refunds->cancel` and `payouts->cancel`, takes an optional second argument, `['idempotency_key' => '…']`.
+
+By default, `refunds->create` refunds the payment that paid the invoice. To refund an extra payment on the same invoice, pass its id as `payment_id`. Leave out `amount` to refund what is left of that payment.
+
+The `asset_id` of a payout is the coin the recipient receives. Take it from `tokens->list()`, which returns every coin the checkout accepts, with its chain, decimals and USD price.
+
+### Pagination
+
+Every list call except `tokens->list()` returns a page as `['object' => 'list', 'data' => [...], 'has_more' => bool]`. For the next page, pass the last item's id as `starting_after`, or let `listAll()` loop over every page:
+
+```php
+foreach ($solverr->invoices->listAll(['status' => 'paid']) as $invoice) {
+    echo $invoice['id'], PHP_EOL;
+}
+```
+
+`tokens->list()` returns every coin in one `['object' => 'list', 'data' => [...]]` response, without pages.
+
+## Errors and retries
+
+API errors throw `Solverr\Exception\ApiException` with the public properties `status`, `type`, `param` (the invalid field), `errorCode` (a finer reason when the API adds one; none of the endpoints this SDK calls send one today) and `retryAfter` (the seconds the API asked you to wait, for example on a `429`). `getMessage()` returns the message. When the API cannot be reached, `status` is `0` and `type` is `connection_error`. Text you send must be valid UTF-8. Other text, such as ISO-8859-1 from an older database, throws PHP's `\JsonException` before anything is sent, so convert it with `mb_convert_encoding()` first.
+
+Each attempt times out after 15 seconds, counting the response headers and body. The SDK retries timeouts, network errors and 5xx responses twice with a growing delay, so one call can take up to about 47 seconds; `Retry-After` waits add to that. A `429` (rate limit), or a `409` saying that an earlier request with the same `Idempotency-Key` is still being processed, is retried up to three times after the wait in its `Retry-After` header. When `Retry-After` asks for more than 10 seconds, the SDK throws the error at once instead.
+
+### Idempotency keys
+
+Every POST carries an `Idempotency-Key` header, generated when you do not pass one. Every retry sends the same key, so a retried POST never creates a second object. Pass your own key to make retries safe across process restarts too. A key belongs to your business across every endpoint for 24 hours, so give each operation its own key: for example `invoice-order-1042` for the invoice of order 1042 and `refund-order-1042` for its refund, not the order id alone.
+
+If you send a key again with a different request (another body or another endpoint), the API answers `409` with type `idempotency_conflict`, and the SDK throws it without retrying.
+
+```php
+$invoice = $solverr->invoices->create(
+    ['amount' => '25.00', 'currency' => 'USD', 'order_id' => '1042'],
+    ['idempotency_key' => 'invoice-order-1042'],
+);
+```

@@ -1,0 +1,157 @@
+---
+title: Agent kit
+icon: wallet
+description: "solverr-agent gives an AI agent NEAR and Base wallets that pay Solverr 402 paywalls within your spending limits, in your code or as a local MCP server."
+---
+
+`solverr-agent` lets an AI agent pay Solverr paywalls from NEAR and Base wallets, inside your code or as a local MCP server, and never spends past the limits you set. Its keys stay in memory on your machine, are used only to sign transfers, and are never logged.
+
+## Install
+
+```bash
+npm install solverr-agent
+```
+
+The package needs Node 22.22.2 or later.
+
+## Use it in code
+
+```ts
+import { createAgentWallet } from "solverr-agent";
+
+const agent = createAgentWallet({
+  near: { accountId: process.env.AGENT_NEAR_ACCOUNT!, privateKey: process.env.AGENT_NEAR_KEY! },
+  base: { privateKey: process.env.AGENT_BASE_KEY! },
+  limits: { perPaymentUsd: 5, dailyUsd: 20, allow: ["api.example.com"] },
+  trustedGateways: ["https://pay.example.com"],
+});
+
+const res = await agent.fetch("https://api.example.com/premium-data"); // pays a 402 automatically
+console.log(res.status, await res.json());
+
+console.log(await agent.balances());
+console.log(await agent.spending());
+console.log(agent.limits());
+agent.setLimits({ dailyUsd: 10 });
+```
+
+`agent.fetch` works like `fetch`. When the answer is a `402` with the `solverr` scheme, it pays and sends the request again. When it refuses a payment or cannot finish one, it throws a [`PaymentError`](#errors).
+
+A `signal` you pass in the second argument of `agent.fetch` covers the first request and the payment up to the transfer. Aborting before then throws the signal's reason, and nothing is sent. Once the transfer starts, the signal no longer applies: the agent always finishes the payment and the paid request, so a slow payment never costs you the response you paid for.
+
+## Spending limits
+
+Limits are checked before every quote and again before every transfer.
+
+| Limit | Meaning |
+|---|---|
+| `perPaymentUsd` | The largest single payment, in USD |
+| `dailyUsd` | The largest total over the last 24 hours, in USD |
+| `allow` | The hosts the agent may pay, such as `api.example.com` or `*.example.com` for subdomains (an empty list allows nothing) |
+
+Every payment is written to a local JSON spend log, `~/.solverr/agent-spend-log.json` by default, so the daily limit holds across restarts and across agents that share the log file. Entries that were sent, paid or failed count toward the daily limit, because money may have left the wallet. Only aborted entries, where nothing was sent, do not count.
+
+The limit check and the reservation happen in one locked step on the spend log file, so two calls or two agent processes cannot both pass the daily limit. If the spend log is corrupt, the kit stops paying instead of resetting the total.
+
+## How it pays
+
+1. The agent calls the URL. If the answer is not a `402`, it returns that answer.
+2. It checks that the host is allowed, that the payment URLs point to a Solverr address in `trustedGateways`, and that the invoice is live. Test invoices are refused.
+3. It prices the invoice in USD and checks the per-payment and 24-hour limits.
+4. It reserves the amount in the spend log before anything is sent.
+5. It ranks the coins it holds: the coin the paywall's business receives first, then the same coin on another chain, then stablecoins, then the rest. It tries up to three of them.
+6. It asks for a quote with its own address as the refund address, then checks the coin, refund address, deposit address, amount, deadline and limits again.
+7. It sends the exact amount to the deposit address, reports the transaction, and waits until the invoice is paid.
+8. It sends the request again with the `PAYMENT-SIGNATURE` header. After a network error, 429 or 5xx, it makes up to 3 tries in total, always with the same payment and `resourceTimeoutMs` (30 seconds by default) per try. It waits 1 second, then 2 seconds, between tries. After a 429 or 503, it waits at least the `Retry-After` the site sends, up to 60 seconds. It stops early when the next wait would end more than `paymentTimeoutMs` after the first try. A `402` that follows a try with no answer also counts as a failed try, because that earlier request may still be using the payment.
+
+### Payments the site did not use
+
+A site that answers the paid request with an error (400 or higher) does not use the payment, so the invoice can still be redeemed. The wallet keeps such a payment in memory for the same method, origin and path, also after `paid_request_failed` from a 429, 5xx, network error, or a `402` that followed a try with no answer. The next time that URL answers `402`, the wallet sends the kept payment again before it pays anything new. This costs nothing and adds nothing to the spend log. The kept payment is dropped once the site accepts it, or answers it with `402`, after which the new invoice is paid.
+
+`agent.unusedInvoice(url, method?)` returns the invoice id of a kept payment, with `GET` as the default method. Kept payments are lost when the process stops.
+
+## Options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `near` | none | `{ accountId, privateKey: "ed25519:…", rpcUrl? }` |
+| `base` | none | `{ privateKey: "0x…", rpcUrl? }` |
+| `limits` | Required | `{ perPaymentUsd, dailyUsd, allow }` |
+| `spendLogPath` | `~/.solverr/agent-spend-log.json` | Where the spend log is kept |
+| `assets` | USDC, USDT and wNEAR on NEAR; USDC and ETH on Base | Coins to check and pay with |
+| `trustedGateways` | Required | Solverr addresses the agent will pay through, such as `https://pay.example.com`. The gateway prices the invoice, so a paywall that names any other gateway is refused |
+| `paymentTimeoutMs` | 180000 | How long to wait for the invoice to be paid after sending |
+| `requestTimeoutMs` | 15000 | Timeout of each RPC and gateway call |
+| `resourceTimeoutMs` | 30000 | Timeout of each paid request, and of the first request when you pass no `signal`, including reading the body. Raise it for endpoints that take longer to answer or stream their body |
+
+Unless you set `rpcUrl`, the kit uses `https://free.rpc.fastnear.com` for NEAR and `https://mainnet.base.org` for Base.
+
+## Errors
+
+Every `PaymentError` has a `code` and a `fundsSent` flag. When `fundsSent` is `true`, it also has `invoiceId`, the invoice the money went to.
+
+| `code` | Meaning |
+|---|---|
+| `host_not_allowed` | The host is not in `allow` |
+| `per_payment_limit` | The payment is above `perPaymentUsd` |
+| `daily_limit` | The payment would pass `dailyUsd` in the last 24 hours |
+| `invalid_challenge` | The `402` answer is not a valid `solverr` payment request |
+| `untrusted_gateway` | The payment URLs do not use https, or point to a Solverr address that is not in `trustedGateways` |
+| `test_invoice` | The invoice is a test invoice, which cannot be paid on-chain |
+| `invoice_expired` | The invoice expires in less than a minute, too soon to pay safely, so nothing was sent |
+| `no_funds` | No coin the agent holds covers the payment and its gas |
+| `quote_unavailable` | No coin could be quoted |
+| `quote_mismatch` | The quote did not match what the agent asked for |
+| `transfer_failed` | The on-chain transfer failed |
+| `payment_failed` | After sending, the invoice ended underpaid, refunded or failed |
+| `payment_timeout` | The transfer was sent, but the invoice was not paid in time |
+| `payment_unconfirmed` | The transfer was sent, but an error stopped the agent from confirming the payment |
+| `paid_request_failed` | The invoice is paid, but the request with the payment failed after 3 tries or when the next wait would pass `paymentTimeoutMs`, or the site answered `402` |
+| `body_not_replayable` | The request body cannot be sent a second time after paying |
+
+When `fundsSent` is `true`, the money has left the wallet; do not pay for that request again. On `payment_timeout` and `payment_unconfirmed`, check the invoice's status before you do anything else. The MCP server returns the same fields as `funds_sent` and `invoice_id`. For any other error, such as a gateway or wallet RPC that fails before a transfer, a `set_limits` value above the starting one, or a host outside the starting allow list, the MCP server returns the code `request_failed` with `funds_sent: false`.
+
+## Run it as a local MCP server
+
+The kit runs as an MCP server over stdio, so Claude Code, Cursor or another MCP client can pay for API calls. To add it to Claude Code, pass your wallet, limits and trusted gateways as environment variables:
+
+```bash
+claude mcp add solverr-agent \
+  -e AGENT_NEAR_ACCOUNT=agent.near -e AGENT_NEAR_KEY=ed25519:… \
+  -e AGENT_LIMIT_PER_PAYMENT_USD=1 -e AGENT_LIMIT_DAILY_USD=5 -e AGENT_ALLOW_HOSTS=api.example.com \
+  -e AGENT_TRUSTED_GATEWAYS=https://pay.example.com \
+  -- npx solverr-agent mcp
+```
+
+One `pay_url` call can take about 5 minutes with the default settings: up to 60 seconds to send the transfer, up to 3 minutes (`AGENT_PAYMENT_TIMEOUT_MS`) for the invoice to be paid, then the paid request. Many MCP clients stop waiting for a tool after 60 seconds. The payment still completes, but the model never sees the result and may pay again. Raise your client's tool timeout to at least 5 minutes. In Claude Code, set `MCP_TOOL_TIMEOUT=300000` before you start it.
+
+### MCP tools
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `pay_url` | `url` (http or https), optional `method` (`GET`, `POST`, `PUT`, `PATCH` or `DELETE`, default `GET`), `headers` and `body` | Fetches a URL on a host in the allow list with the method you choose, pays a 402 within the limits, and returns `status`, `content_type`, the receipt as `payment`, `body` and `body_truncated`. Redirects come back with their `location` instead of being followed. When the site answers with an error and a paid invoice was not used, the result also has `invoice_id` and `payment_unused: true`, and calling `pay_url` again with the same method and URL sends that payment again |
+| `get_balances` | None | Returns the balances of the coins the wallet can pay with |
+| `get_spending` | None | Returns the limits, the total of the last 24 hours, and recent payments |
+| `set_limits` | Optional `per_payment_usd`, `daily_usd` and `allow` (a list of hosts) | Lowers limits or narrows the allow list, but cannot raise them above the starting values, so text on a paid page cannot talk the model into spending more |
+
+### Environment variables
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `AGENT_NEAR_ACCOUNT`, `AGENT_NEAR_KEY` | One wallet | NEAR account and `ed25519:` key |
+| `AGENT_BASE_KEY` | One wallet | Base private key |
+| `AGENT_LIMIT_PER_PAYMENT_USD` | Yes | Largest single payment |
+| `AGENT_LIMIT_DAILY_USD` | Yes | Largest total over 24 hours |
+| `AGENT_ALLOW_HOSTS` | Yes | Comma-separated hosts that `pay_url` may request and pay |
+| `AGENT_TRUSTED_GATEWAYS` | Yes | Comma-separated Solverr addresses the agent may pay through |
+| `AGENT_NEAR_RPC_URL`, `AGENT_BASE_RPC_URL` | No | Custom RPCs |
+| `AGENT_SPEND_LOG` | No | Spend log path |
+| `AGENT_PAYMENT_TIMEOUT_MS` | No | Wait for payment, in ms |
+| `AGENT_RESOURCE_TIMEOUT_MS` | No | `resourceTimeoutMs`, in ms |
+
+## Wallet and network rules
+
+- **Native NEAR is not used to pay.** NEAR Intents takes wNEAR (`wrap.near`), so the agent pays with wNEAR, USDC or USDT on NEAR. Keep a little more than 0.01 NEAR available: 0.01 NEAR is held back for gas, plus the token's storage deposit when the deposit address is new.
+- **Route minimums.** A NEAR Intents route can have a temporary minimum that changes without notice. When a route is refused, the kit moves on to the next coin in its ranking.
+- **`pay_url` only reaches public addresses.** It resolves the host and refuses loopback, private, link-local (including cloud metadata such as `169.254.169.254`), multicast and reserved addresses. To reach a local server, add its exact address to `AGENT_ALLOW_HOSTS` and use the same address in the URL: `127.0.0.1`, `[::1]` or `localhost`.
+- **Keys are hot keys.** The agent wallet is a hot wallet. Fund it with only what you are willing to let the agent spend.

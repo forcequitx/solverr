@@ -1,0 +1,66 @@
+---
+title: WooCommerce
+icon: store
+description: "Accept Solverr payments in a WooCommerce store: requirements, plugin setup, how an order is paid, and how each webhook event updates the order."
+---
+
+The Solverr plugin adds "Solverr — pay with any crypto" as a payment method to your WooCommerce store. When a customer chooses it, the plugin creates a Solverr invoice for the order and marks the order as paid once a signed Solverr webhook confirms the payment.
+
+## Requirements
+
+Before you install the plugin, check that your store meets these requirements:
+
+- WordPress 6.5 or later and PHP 8.3 or later.
+- WooCommerce 8.0 or later.
+- Store currency USD, EUR or INR. With any other currency, the payment method is hidden at checkout and an admin notice explains why.
+- A public HTTPS address, because Solverr delivers webhooks only to public HTTPS addresses.
+
+The plugin works with the classic checkout and the Cart and Checkout blocks, and supports High-Performance Order Storage (HPOS).
+
+## Install and set up
+
+1. Download <a href="/downloads/solverr-woocommerce.zip" download>solverr-woocommerce.zip</a> and upload it in WordPress under **Plugins → Add New Plugin → Upload Plugin**. To install it by hand instead, unzip it and upload the `solverr-woocommerce` folder to `/wp-content/plugins/`.
+2. Activate the plugin while WooCommerce is active.
+3. Open **WooCommerce → Settings → Payments → Solverr**.
+4. Under **API base URL**, enter your Solverr address, for example `https://your-solverr-host`.
+5. In your Solverr dashboard, open **Developers** and select **Create API key**.
+6. Paste the key, which starts with `sk_live_`, into **API key** in the plugin.
+7. Copy your store's webhook URL, shown under **Webhook secret** in the plugin settings. It ends in `/wc-api/solverr/`, or in `?wc-api=solverr` when your permalinks are set to **Plain**.
+8. In Solverr, paste that URL into the **Webhook** card in **Dashboard → Developers** and select **Save**. A business has one webhook URL, so this replaces any URL saved before.
+9. Paste the signing secret, which Solverr shows once, into **Webhook secret** in the plugin. Solverr creates a secret only when the business has none yet. If no secret appears, select **Rotate signing secret**, then **Rotate it**, and paste the new secret. The old secret keeps signing events beside the new one for 24 hours.
+10. Tick **Enable** and save the settings.
+
+Only the owner of the business can create the API key in step 5, save the webhook URL in step 8 and rotate the signing secret. Creating the key also needs a verified payout wallet. Creating the key, saving a changed webhook URL and rotating the secret each need a sign-in within the last 30 minutes; if yours is older, sign out and sign in again. The key is a live key, so every order paid through it is a real payment.
+
+## How a payment works
+
+1. The customer chooses "Solverr — pay with any crypto" at checkout and places the order.
+2. The plugin creates a Solverr invoice for the order total and sends the customer to the Solverr checkout page.
+3. The customer pays, and Solverr sends a signed webhook to your store.
+4. The plugin checks the signature and marks the order as paid, and the customer returns to your order confirmation page.
+
+If the customer retries the checkout and the order total and currency have not changed, the plugin reuses the order's invoice while a payment for it is under way, or while the invoice still waits for payment with at least 10 minutes left. Otherwise, it creates a new invoice for the order. Underpaid, failed, refunded and expired invoices are never reused.
+
+## How webhooks update orders
+
+| Event | What the plugin does |
+|---|---|
+| `invoice.paid` | Marks the order as paid with a note of the amount you received, or puts it on hold with a note when the invoice's amount or currency does not match the order total, so you can check the payment before you ship. If the order had moved to another payment method, the plugin first sets it back to Solverr. If another invoice already paid the order, the plugin only adds a note asking you to refund this payment from your Solverr dashboard |
+| `invoice.expired` | Cancels a pending order when the expired invoice is the order's current one, while an order on hold stays on hold |
+| `invoice.failed` | Marks the order as failed when the failed invoice is the order's current one and the order is unpaid, and otherwise adds a note; Solverr opens a support case |
+| `invoice.underpaid` | Adds a note that less than the full amount arrived and the coins go back to the payer, so the order is still unpaid |
+| `invoice.refunded` | Adds a note that the coins were returned to the payer |
+| `invoice.extra_payment` | Adds a note asking you to refund the second payment from your Solverr dashboard |
+| Any other event | Answers `200` and leaves the order unchanged |
+
+Every webhook is checked with its HMAC-SHA256 signature and a 5-minute time window, and a repeated delivery is applied only once. The plugin also locks each order briefly, so deliveries for one order are applied one at a time. When the order stays busy, your store answers `503` and Solverr retries the delivery later.
+
+Refunds you make in Solverr are not applied to the WooCommerce order. Record them in WooCommerce yourself.
+
+## Common questions
+
+**Why is Solverr missing from the checkout?** The method shows only when it is enabled, the API base URL, API key and webhook secret are filled in, and the store currency is USD, EUR or INR. While the method is enabled but hidden, an admin notice explains what to change.
+
+**What if the customer pays after the invoice expired?** If the payment still arrives, Solverr marks the invoice as paid with the `late` flag, and the plugin completes the order, even a canceled one.
+
+**Where are errors logged?** In **WooCommerce → Status → Logs**, under the source `solverr`. The logs never contain your API key or webhook secret.

@@ -1,0 +1,82 @@
+---
+title: Best for you
+icon: check
+description: How Best for you compares a connected wallet's balances to find the cheapest coin to pay with, and how to run the same comparison with the API.
+---
+
+**Best for you** finds the cheapest coin to pay with in a customer's connected wallet. It reads the wallet's balances, asks NEAR Intents what the payment costs in each coin, and lists the coins from lowest to highest cost. Agents and custom checkouts can run the same comparison through a public endpoint.
+
+## What the customer sees
+
+1. The customer selects **Connect a wallet to find your cheapest coin** above the coin list.
+2. They connect an EVM, Solana or NEAR wallet. The panel shows "Reading your balances…", then "Comparing costs…".
+3. The panel lists up to 5 coins, each with its chain, the amount to send and its USD value. The first row is marked **Lowest cost**, the others **Also possible**.
+4. The customer selects a row. The checkout opens the payment for that coin with the connected wallet, and the customer approves it as usual.
+
+The customer can ignore the panel and choose a coin from the list below it.
+
+## Which coins are compared
+
+- The panel compares only coins whose wallet balance is worth at least the invoice amount plus 2%.
+- When more than 5 coins qualify, the coin you receive comes first, then the coins with the highest balance.
+- EVM balances are read on Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain and Avalanche. NEAR balances are read for USDC, USDT, wNEAR, ETH and wBTC. The wNEAR balance also counts the wallet's NEAR minus 0.05 NEAR kept for fees, because a wNEAR payment wraps the missing NEAR in the same transaction.
+- A coin that NEAR Intents cannot route for this amount is left out, for example one whose route has a temporary minimum above the price ([Chains and coins](/docs/payments/chains-and-coins#route-minimums) explains these minimums).
+
+If the wallet holds too little of every supported coin, the panel says so, and the customer chooses a coin from the list below.
+
+## Compare costs with the API
+
+`POST /api/v1/invoices/:id/estimate` is public and needs no API key. Call it from an agent or your own front end to compare up to 5 coins before paying.
+
+```bash
+curl https://your-solverr-host/api/v1/invoices/inv_7h3K9dWq2LmN4pRt6vXy/estimate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "origin_assets": [
+      "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
+      "nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near"
+    ]
+  }'
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "asset_id": "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
+      "ok": true,
+      "amount_in": "25.06",
+      "amount_in_base": "25060000",
+      "amount_in_usd": "25.06"
+    },
+    {
+      "asset_id": "nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near",
+      "ok": false,
+      "reason": "USDT on TRON needs a payment of at least $X right now. Pay with USDC on Base, or choose another coin.",
+      "minimum_usd": "X"
+    }
+  ]
+}
+```
+
+### Request and response fields
+
+| Field | Meaning |
+|---|---|
+| `origin_assets` | 1 to 5 coin ids from [the tokens list](/docs/payments/chains-and-coins#which-coins), with duplicates ignored |
+| `refund_address` | The payer's address (optional). It must be valid on each coin's chain; otherwise that coin gets `ok: false` |
+| `amount_in`, `amount_in_base` | What the payer would send, as a decimal and in base units |
+| `amount_in_usd` | Its value in USD, or `null` when NEAR Intents gives no USD price |
+| `reason` | Why this coin cannot be used right now |
+| `minimum_usd` | The smallest payment in US dollars that NEAR Intents currently takes on this route, when it names one |
+| `temporary` | `true` when the payment network did not answer, so the coin may work on a later try |
+
+Leave `refund_address` out to check coins before the payer gives an address, as the checkout does when a coin is chosen. The [API reference](/docs/api/estimatePayments) lists every field.
+
+### Rules and limits
+
+- The estimate is a dry quote. It creates no deposit address and reserves nothing, so the payer still gets a real quote before paying.
+- The invoice must still be payable. A paid, expired or in-progress invoice returns `409 invalid_state`.
+- You can request 10 estimates per minute per invoice, and compare 25 coins per minute per IP address and 100 per network. Each request counts the number of different coins it compares.
+- On the demo store, estimates come from Solverr's simulated payment network instead of NEAR Intents.

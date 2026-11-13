@@ -1,0 +1,542 @@
+@import "tailwindcss";
+/** Fumadocs styles; its main colors are remapped to the theme tokens below (the neutral file supplies the rest, such as diff colors). */
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "fumadocs-openapi/css/preset.css";
+
+/** `dark:` follows the saved choice on <html data-theme>, else the system setting, from the first paint. Screens only:
+    printing always uses the light theme, since paper is white and browsers skip backgrounds. */
+@custom-variant dark {
+  @media screen {
+    &:where([data-theme="dark"] *) {
+      @slot;
+    }
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+/** Solverr theme: white cards on neutral grays, a blue primary, lime for growth and charts. The logo colors are brand colors and do not follow the accent. */
+:root {
+  --logo-top: #155dfc;
+  --logo-bottom: #7ccf00;
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f7f7f7;
+  --text: #0a0a0a;
+  /** At least 4.5:1 (WCAG AA) on every light surface, the #f7f7f7 trays included. */
+  --muted: #6b6b6b;
+  --border: #ebebeb;
+  --accent: #155dfc;
+  --accent-hover: #1447e6;
+  --accent-ink: #ffffff;
+  --accent-text: #155dfc;
+  /** Text on the 15% accent tint, where --accent-text is only 4.2:1; this one is above the 4.5:1 small text needs. */
+  --accent-tint-text: #1447e6;
+  --success: #3d6300;
+  --success-bg: #d8f999;
+  --warn: #894b00;
+  --warn-bg: #fef9c2;
+  --danger: #c10007;
+  --danger-bg: #ffe2e2;
+  --info: #005f78;
+  --info-bg: #cefafe;
+  /** Solid fills behind white text for a button's success and error states (4.5:1 or more); the same in dark mode. */
+  --success-solid: #497d00;
+  --danger-solid: #c10007;
+  --control-radius: 10px;
+  --card-radius: 22px;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+  /** Backdrop behind a dialog; the same in dark mode. */
+  --scrim: rgb(0 0 0 / 0.3);
+  --chart-1: #9ae600;
+  --chart-2: #2b7fff;
+  --chart-3: #00b8db;
+  --chart-4: #f0b100;
+  --chart-muted: #e5e5e5;
+  --heat-0: #f2f2f2;
+  --heat-1: #dbeafe;
+  --heat-2: #bedbff;
+  --heat-3: #8ec5ff;
+  --heat-4: #51a2ff;
+  --heat-5: #9ae600;
+  /** Type scale, phone first: body copy, secondary (meta) copy and form fields. Fields stay 16px on phones so iOS does not zoom on focus. */
+  --type-body: 1rem;
+  --type-body-lh: 1.5rem;
+  --type-meta: 0.875rem;
+  --type-meta-lh: 1.25rem;
+  --type-field: 1rem;
+  color-scheme: light;
+}
+
+@media (width >= 40rem) {
+  :root {
+    --type-body: 0.9375rem;
+    --type-body-lh: 1.375rem;
+  }
+}
+
+/** Smaller fields only with a mouse or trackpad: a phone held sideways is wider than 40rem, and iOS zooms on fields under 16px. */
+@media (width >= 40rem) and (pointer: fine) {
+  :root {
+    --type-field: 0.9375rem;
+  }
+}
+
+/** The dark tokens apply on screens only, so a page printed in dark mode still prints dark text on white paper. */
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --logo-top: #51a2ff;
+    --logo-bottom: #9ae600;
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --surface-2: #1c1c1c;
+    --text: #fafafa;
+    --muted: #a1a1a1;
+    --border: #262626;
+    /** Buttons keep the deeper blue so white text stays at 4.5:1 or more; blue text uses the lighter shade to read on dark surfaces. */
+    --accent: #155dfc;
+    --accent-hover: #1447e6;
+    --accent-text: #51a2ff;
+    --accent-tint-text: #51a2ff;
+    --success: #bbf451;
+    --success-bg: rgb(124 207 0 / 0.16);
+    --warn: #ffdf20;
+    --warn-bg: rgb(240 177 0 / 0.14);
+    --danger: #ff6467;
+    --danger-bg: rgb(251 44 54 / 0.15);
+    --info: #53eafd;
+    --info-bg: rgb(0 184 219 / 0.15);
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    --chart-2: #51a2ff;
+    --chart-muted: #2a2a2a;
+    --heat-0: #1c1c1c;
+    --heat-1: #162456;
+    --heat-2: #193cb8;
+    --heat-3: #1447e6;
+    --heat-4: #2b7fff;
+    color-scheme: dark;
+  }
+}
+
+@media screen {
+  :root[data-theme="dark"] {
+    --logo-top: #51a2ff;
+    --logo-bottom: #9ae600;
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --surface-2: #1c1c1c;
+    --text: #fafafa;
+    --muted: #a1a1a1;
+    --border: #262626;
+    --accent: #155dfc;
+    --accent-hover: #1447e6;
+    --accent-text: #51a2ff;
+    --accent-tint-text: #51a2ff;
+    --success: #bbf451;
+    --success-bg: rgb(124 207 0 / 0.16);
+    --warn: #ffdf20;
+    --warn-bg: rgb(240 177 0 / 0.14);
+    --danger: #ff6467;
+    --danger-bg: rgb(251 44 54 / 0.15);
+    --info: #53eafd;
+    --info-bg: rgb(0 184 219 / 0.15);
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    --chart-2: #51a2ff;
+    --chart-muted: #2a2a2a;
+    --heat-0: #1c1c1c;
+    --heat-1: #162456;
+    --heat-2: #193cb8;
+    --heat-3: #1447e6;
+    --heat-4: #2b7fff;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-logo-top: var(--logo-top);
+  --color-logo-bottom: var(--logo-bottom);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-text: var(--accent-text);
+  --color-accent-tint-text: var(--accent-tint-text);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-success-solid: var(--success-solid);
+  --color-danger-solid: var(--danger-solid);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-scrim: var(--scrim);
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  /** IDs, addresses and code use Figtree too; `font-mono` marks them as code text. */
+  --font-mono: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --radius-control: var(--control-radius);
+  --radius-card: var(--card-radius);
+  --shadow-card: var(--card-shadow);
+  --text-body: var(--type-body);
+  --text-body--line-height: var(--type-body-lh);
+  --text-meta: var(--type-meta);
+  --text-meta--line-height: var(--type-meta-lh);
+  --text-field: var(--type-field);
+  --text-field--line-height: 1.5rem;
+}
+
+/** Fumadocs colors follow the page theme. */
+:root {
+  --color-fd-background: var(--bg);
+  --color-fd-foreground: var(--text);
+  --color-fd-muted: var(--surface-2);
+  --color-fd-muted-foreground: var(--muted);
+  --color-fd-popover: var(--surface);
+  --color-fd-popover-foreground: var(--text);
+  --color-fd-card: var(--surface);
+  --color-fd-card-foreground: var(--text);
+  --color-fd-border: var(--border);
+  --color-fd-primary: var(--accent);
+  --color-fd-primary-foreground: var(--accent-ink);
+  --color-fd-secondary: var(--surface-2);
+  --color-fd-secondary-foreground: var(--text);
+  --color-fd-accent: var(--surface-2);
+  --color-fd-accent-foreground: var(--text);
+  --color-fd-ring: var(--accent);
+  --color-fd-overlay: rgb(0 0 0 / 0.25);
+  --color-fd-success: var(--success);
+  --color-fd-warning: var(--warn);
+  --color-fd-error: var(--danger);
+  --color-fd-info: var(--accent-text);
+}
+
+/** Docs code highlighting uses its dark colors in the app's dark mode, on screens only like the dark tokens; Fumadocs alone
+    switches only on a `.dark` class. */
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shiki span {
+    color: var(--shiki-dark);
+    font-style: var(--shiki-dark-font-style);
+  }
+}
+
+@media screen {
+  :root[data-theme="dark"] .shiki span {
+    color: var(--shiki-dark);
+    font-style: var(--shiki-dark-font-style);
+  }
+}
+
+html {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar {
+  display: none;
+}
+
+/** Every other scroll area gets a thin themed scrollbar without arrow buttons through the -webkit- rules (Chrome, Edge, Safari);
+    they stop applying to an element that sets `scrollbar-width` or `scrollbar-color`, which brings the arrows back. */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--muted) 45%, transparent);
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
+    }
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer base {
+  :where(h1, h2, h3, h4, h5, h6) {
+    font-family: var(--font-heading);
+  }
+  /** Logo SVGs share fixed clip and mask ids, so a logo in a closed (visibility: hidden) menu must still clip the visible logos that reference the same id. */
+  :where(clipPath, mask) * {
+    visibility: visible;
+  }
+  /** Every control shows the accent ring when reached by keyboard; components with their own focus style override it. */
+  :where(a, button, summary, [role="button"], [role="tab"], [role="menuitem"], [role="menuitemradio"], [role="option"], [tabindex]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/** NEAR Connect dialog in the app theme. Its own <style> is added to <head> later, so the doubled class outranks its `.n<id> …` rules. */
+.hot-connector-popup.hot-connector-popup * {
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+.hot-connector-popup.hot-connector-popup .modal-container {
+  background-color: var(--scrim);
+}
+.hot-connector-popup.hot-connector-popup .modal-content {
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  box-shadow: 0 12px 40px -12px rgb(0 0 0 / 0.35);
+}
+@media (max-width: 600px) {
+  .hot-connector-popup.hot-connector-popup .modal-content {
+    border-width: 1px 0 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+.hot-connector-popup.hot-connector-popup .modal-header p {
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.hot-connector-popup.hot-connector-popup .modal-header button {
+  border-radius: var(--control-radius);
+}
+.hot-connector-popup.hot-connector-popup .modal-header button:hover {
+  background: var(--surface-2);
+}
+.hot-connector-popup.hot-connector-popup .modal-header button path,
+.hot-connector-popup.hot-connector-popup .remove-wallet-button path {
+  stroke: var(--muted);
+}
+.hot-connector-popup.hot-connector-popup .modal-header button circle {
+  fill: var(--muted);
+}
+.hot-connector-popup.hot-connector-popup .modal-body {
+  background: var(--surface-2);
+  border-radius: 16px;
+}
+.hot-connector-popup.hot-connector-popup .modal-body p,
+.hot-connector-popup.hot-connector-popup .connect-item-info .wallet-address {
+  color: var(--muted);
+  letter-spacing: normal;
+}
+.hot-connector-popup.hot-connector-popup .modal-body a {
+  color: var(--accent-text);
+}
+.hot-connector-popup.hot-connector-popup .modal-body textarea {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+}
+.hot-connector-popup.hot-connector-popup .modal-body button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--control-radius);
+  font-family: var(--font-heading);
+  font-weight: 600;
+}
+.hot-connector-popup.hot-connector-popup .modal-body button:hover {
+  background: var(--accent-hover);
+}
+.hot-connector-popup.hot-connector-popup .connect-item {
+  border-radius: 14px;
+}
+/** The list sits on surface-2, so a hovered wallet lifts to surface. */
+.hot-connector-popup.hot-connector-popup .connect-item:hover {
+  background: var(--surface);
+}
+.hot-connector-popup.hot-connector-popup .connect-item-info > :first-child {
+  font-family: var(--font-heading);
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+.hot-connector-popup.hot-connector-popup .connect-item img {
+  border-radius: var(--control-radius);
+}
+
+/** CSS motion as `animate-*` utilities: entrances for pages, rows, checkout and landing page pieces, plus looping pulses and shimmers. Popovers, lists and charts use Motion and Recharts. */
+@theme {
+  --animate-page-in: page-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-row-in: row-in 220ms ease-out both;
+  --animate-fade-in: fade-in 220ms ease-out both;
+  --animate-shimmer: shimmer 1.4s ease-in-out infinite;
+  /** Content that follows a card, such as the buttons under stacked cards, rises in after it. */
+  --animate-rise-in: rise-in 500ms 350ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  /** Hero band of the payment page, payment link and onboarding: its circles grow in, the card rises over the band, and the current step dot pulses. */
+  --animate-drift-in: drift-in 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-card-up: card-up 750ms 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-dot-pulse: dot-pulse 1.8s ease-in-out infinite;
+  /** The merchant card widens into place and its amount half slides in after it. */
+  --animate-card-grow: card-grow 600ms 100ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-panel-in: panel-in 600ms 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  /** Payment step: the connected wallet's ring springs open. */
+  --animate-ring-in: ring-in 700ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  /** Stacked cards (result screens, Best for you): the front card drops in and the tray behind it slides down. */
+  --animate-deck-drop: deck-drop 600ms cubic-bezier(0.34, 1.3, 0.64, 1) both;
+  --animate-deck-slide: deck-slide 600ms 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-shimmer-x: shimmer-x 1.2s linear infinite;
+  /** Coin picker network tiles zoom in one after another. */
+  --animate-tile-in: tile-in 400ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+  /** Landing page: the nav drops in and the chain strip scrolls without end. */
+  --animate-nav-drop: nav-drop 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-marquee: marquee 60s linear infinite;
+  --animate-text-sheen: text-sheen 6s 1.8s ease-in-out infinite;
+  --animate-glow-breathe: glow-breathe 9s ease-in-out infinite alternate;
+
+  @keyframes text-sheen {
+    from {
+      background-position: 100% 0;
+    }
+    50%,
+    to {
+      background-position: 0% 0;
+    }
+  }
+  @keyframes glow-breathe {
+    to {
+      transform: scale(1.08) rotate(18deg);
+    }
+  }
+
+  @keyframes nav-drop {
+    from {
+      opacity: 0;
+      transform: translateY(-150px);
+    }
+  }
+  @keyframes marquee {
+    to {
+      transform: translateX(-50%);
+    }
+  }
+
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+  }
+  @keyframes drift-in {
+    from {
+      opacity: 0;
+      transform: scale(0.7);
+    }
+  }
+  @keyframes card-up {
+    from {
+      opacity: 0;
+      transform: translateY(40px);
+    }
+  }
+  @keyframes card-grow {
+    from {
+      opacity: 0;
+      transform: scaleX(0.6);
+    }
+  }
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translateX(22px);
+    }
+  }
+  @keyframes dot-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-ink) 25%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent-ink) 8%, transparent);
+    }
+  }
+  @keyframes ring-in {
+    from {
+      transform: scale(0.7);
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+  @keyframes deck-drop {
+    from {
+      opacity: 0;
+      transform: translateY(-14px) scale(0.96);
+    }
+  }
+  @keyframes deck-slide {
+    from {
+      opacity: 0;
+      transform: translateY(-36px);
+    }
+  }
+  @keyframes shimmer-x {
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes tile-in {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+  @keyframes page-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  @keyframes row-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: -100% 0;
+    }
+  }
+}
+
+/** People who ask their system for less motion get instant changes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

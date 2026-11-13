@@ -1,0 +1,37 @@
+# dependencies
+/node_modules
+
+# next.js (the browser tests build into .next-e2e)
+/.next/
+/.next-e2e/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# prisma generated client
+/generated/
+
+# fumadocs-mdx output
+/.source/
+
+# build output of packages/embed (npm run build there)
+/public/embed.js
+# WooCommerce plugin zip (npm run build:plugin)
+/public/downloads/
+
+# environment
+.env
+.env.*
+!.env.example
+/deploy/.env
+/deploy/*.env
+/deploy/postgres-tls/
+
+# Vercel CLI project link (vercel link, vercel env pull)
+/.vercel/
+
+# logs and os files
+npm-debug.log*
+.DS_Store
+Thumbs.db

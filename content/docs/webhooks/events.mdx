@@ -1,0 +1,97 @@
+---
+title: Events and payload
+icon: webhook
+description: The webhook events Solverr sends, their JSON payload and signed headers, how to set up your endpoint, and which events a shop must handle.
+---
+
+Solverr sends a signed `POST` request to your webhook URL whenever an invoice, refund, payout, subscription or support case changes. Use these events to mark orders as paid on your server without polling. Never fulfill orders from browser events.
+
+## Set up your endpoint
+
+Each business has one webhook URL and one signing secret. Only the owner can change them.
+
+1. Open **Dashboard → Developers** and find the **Webhook** card.
+2. In **Endpoint URL (https)**, enter your endpoint URL, for example `https://shop.example/webhooks/solverr`, and select **Save**.
+3. Store the signing secret, which starts with `whsec_` and is shown once, on the server that receives events, for example as `SOLVERR_WEBHOOK_SECRET`.
+4. Select **Send ping event** to check that your endpoint receives and verifies events (see [Test your webhook endpoint](/docs/webhooks/testing)).
+
+To turn webhooks off, clear the URL, select **Turn webhooks off**, then select **Turn off** to confirm. While no URL is saved, events are not queued and are never sent later.
+
+## Payload
+
+Every event is a JSON object with the same five fields:
+
+```json
+{
+  "id": "evt_5tR8mW2xQpL7vN3kB9sZ",
+  "type": "invoice.paid",
+  "mode": "live",
+  "created_at": "2026-11-05T12:03:41.000Z",
+  "data": {
+    "invoice": { "id": "inv_7h3K9dWq2LmN4pRt6vXy", "object": "invoice", "status": "paid", "order_id": "1042" },
+    "payment": { "id": "quo_4kT9mW2xQpL7vN3rB8sZ", "object": "payment", "status": "success" }
+  }
+}
+```
+
+The example shortens `invoice` and `payment`. Real events carry the full [invoice](/docs/api/getInvoice) and [payment](/docs/api/createQuote) objects.
+
+| Field | Meaning |
+|---|---|
+| `id` | Unique event id starting with `evt_`, sent again unchanged on every retry |
+| `type` | The event type from the table below |
+| `mode` | `live` for every payment in your business |
+| `created_at` | When the event happened |
+| `data` | The objects the event is about |
+
+## Request headers
+
+Solverr signs events the [Standard Webhooks](https://www.standardwebhooks.com) way, so any Standard Webhooks library can verify them.
+
+| Header | Value |
+|---|---|
+| `webhook-id` | The event `id` |
+| `webhook-timestamp` | Unix time in seconds when this attempt was signed |
+| `webhook-signature` | `v1,` and the base64 HMAC-SHA256 of `id.timestamp.raw body`; while a rotated secret is still valid, a second `v1,` signature follows after a space |
+| `Content-Type` | `application/json` |
+| `User-Agent` | `Solverr-Webhooks/1` |
+
+[Verify signatures](/docs/webhooks/verify-signatures) shows how to check them.
+
+## Event types
+
+| Type | When it is sent | `data` |
+|---|---|---|
+| `invoice.detected` | The customer's payment was seen on its chain | `invoice`, `payment` |
+| `invoice.paid` | You received the coin you chose, including for a late payment, which has `invoice.late` set to `true` | `invoice`, `payment` |
+| `invoice.underpaid` | Less than the needed amount arrived, and NEAR Intents refunds it | `invoice`, `payment` |
+| `invoice.refunded` | The customer's payment was returned to their refund address | `invoice`, `payment` |
+| `invoice.failed` | The swap failed, and Solverr opens a support case | `invoice`, `payment` |
+| `invoice.expired` | The invoice reached its lifetime while it was still waiting for a payment, or a detected payment ended unpaid after that time. Not sent for an invoice that ended `underpaid`, `refunded` or `failed`, which keeps that status, or for an invoice opened from a payment link where the customer never chose a coin, since that was only a page visit | `invoice` |
+| `invoice.extra_payment` | A second payment for an already paid invoice also succeeded | `invoice`, `payment` |
+| `refund.completed` | A refund you approved reached the customer | `refund` |
+| `refund.failed` | A refund you sent did not complete; `failure_reason` says why, and its amount can be refunded again | `refund` |
+| `refund.canceled` | A refund was canceled before it was sent; its amount can be refunded again | `refund` |
+| `payout.completed` | A payout you approved reached the recipient | `payout` |
+| `payout.failed` | A payout you sent did not complete; `failure_reason` says why | `payout` |
+| `payout.canceled` | A payout was canceled before it was sent | `payout` |
+| `subscription.invoice_created` | A subscription created its next invoice | `invoice` |
+| `support_case.created` | A customer opened a support case from the help page. Sent only while the business has at most 30 support cases in the last 24 hours, counting the cases Solverr opens itself for failed swaps, which never send this event; later cases appear only on the Support page | `support_case`, `invoice` |
+| `test.ping` | You sent a ping event from **Dashboard → Developers** or the API | `message` |
+
+## Which events to handle
+
+For a shop, `invoice.paid` is the event that matters: mark the order paid when it arrives. These cases need extra care:
+
+- **`invoice.paid` with `late: true`.** The customer paid to an address that was already replaced or expired, but the money still reached you. Complete the order or refund it.
+- **`invoice.expired`, then `invoice.paid`.** A late payment can still arrive within 24 hours after expiry. Do not treat `invoice.expired` as final if you can still fulfill the order.
+- **`invoice.detected` is not final.** If that payment is returned or fails, the invoice goes back to where the customer's newest payment attempt stands. When that attempt is still waiting for a payment, no event is sent until the next change. When it already ended, or the invoice's lifetime has passed, you get that status's event: `invoice.underpaid`, `invoice.refunded`, `invoice.failed` or `invoice.expired`.
+- **`invoice.extra_payment`.** The customer paid twice. Return the second payment with **Refund this extra payment** on the invoice's page in **Dashboard → Payments** (see [Refunds](/docs/payments/refunds)).
+- **`invoice.underpaid` and `invoice.refunded`.** No money reached you. After `invoice.underpaid`, NEAR Intents returns the payment to the customer, and `invoice.refunded` follows. The customer can then try again from the checkout page while at least 2 minutes of the invoice's lifetime remain.
+- **No `invoice.expired` after `underpaid`, `refunded` or `failed`.** An invoice that ended in one of these statuses keeps it after `expires_at`. Treat it as unpaid once `expires_at` has passed, unless a late `invoice.paid` arrives.
+
+## Good practice
+
+- The same event can arrive more than once. Store each `id` you handled and skip repeats.
+- Events can arrive out of order when a retry is involved. Trust the `status` in the event's invoice, not the order of arrival.
+- Answer with any 2xx status within 10 seconds, and do slow work after you answer.

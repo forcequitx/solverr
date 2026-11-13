@@ -1,0 +1,47 @@
+---
+title: Earn
+icon: trendUp
+description: Receive each payment as shares of a third-party yield vault in your own wallet, see which vaults are offered, and withdraw shares to USDC.
+---
+
+Earn is an option for the coin you receive: each payment arrives as shares of a yield vault that NEAR Intents can deliver, instead of a coin such as USDC. The shares sit in your own payout wallet like any other token.
+
+<Callout type="error">
+Earn vaults are run by third parties, not by Solverr or NEAR Intents. Yield is not guaranteed, and the value of the shares can go down. Choose Earn only for money you are comfortable holding in that vault.
+</Callout>
+
+## Available vaults
+
+Solverr offers these vaults when NEAR Intents lists them and your payout wallet is on the same network:
+
+| Vault | Network | Provider |
+|---|---|---|
+| gtUSDCp (USDC vault) | Base | Gauntlet |
+| TLO | Ethereum | Third-party vault |
+| kV-gtSOLb (SOL vault) | Solana | Kamino |
+
+## Turn on Earn
+
+1. Verify a payout wallet on Base, Ethereum or Solana, as described in [Settlement and payout wallet](/docs/payments/settlement).
+2. In **Dashboard → Settings → Coin you receive**, choose the option that starts with "Earn:".
+3. Select **Save**.
+
+New invoices then settle in vault shares. Existing invoices keep their coin.
+
+## What changes with Earn
+
+- **The settlement amount.** Vault shares are priced at their current USD value when the invoice is created, like any coin that is not a USD stablecoin. The invoice's `settlement` object shows the number of shares.
+- **Small payments.** Every payment is a swap into the vault, which can have a higher minimum and fee than a stablecoin route. The coin list shows the current minimum, and `GET /api/v1/route-limits` shows the current minimum and fee. Earn suits larger payments.
+- **Refunds and payouts.** Refunds and payouts are paid in the coin you receive, so with Earn they spend vault shares.
+
+## Withdraw your shares
+
+The shares are ordinary tokens in your own wallet, and you can manage or swap them from that wallet at any time. Solverr can also swap them back to USDC for you. Only the owner of the business can start that withdrawal.
+
+1. Open **Dashboard → Settings** and find the **Earn holdings** card. It lists the vault shares in your payout wallet with their USD value.
+2. Select **Withdraw to USDC** next to a vault. Solverr prepares a withdrawal of all your shares of that vault and opens its page.
+3. On that page, connect your payout wallet, select **Send from your wallet**, and approve the transfer in your wallet.
+
+NEAR Intents swaps the shares to USDC on the same network and sends the USDC to your payout wallet. The withdrawal shows in **Dashboard → Refunds & payouts**.
+
+Only one withdrawal per vault can be open at a time. Approve it or wait for it to finish before you start another.

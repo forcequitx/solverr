@@ -1,0 +1,113 @@
+---
+title: Quickstart
+icon: zap
+description: Set up your business, verify a payout wallet, create an API key, then create your first invoice with the API and open its checkout page.
+---
+
+This guide takes you from sign-in to your first invoice in about five minutes. In the examples, `https://your-solverr-host` stands for the address of your Solverr app. Replace it with yours when you copy a command. On hosted Solverr, that address is `https://solverr.xyz`.
+
+## Before you start
+
+The demo store at `https://your-solverr-host/demo` shows the whole checkout without real money. It is a pretend coffee shop whose checkout carries a **Demo** tag. Its **Simulate a payment** panel finishes a payment with any outcome, and no coins move.
+
+<Callout type="warn">
+Your API key is a live key. Invoices you create with it are real, and payments to them move real money. Keep the key on your server and never put it in a web page or app.
+</Callout>
+
+## 1. Sign in and set up
+
+Open `https://your-solverr-host/signin`. Sign-in and business setup are one flow of three steps. When you sign in again later, Solverr opens your dashboard, or the step where you left off.
+
+1. **Sign in.** Pick an EVM wallet (such as MetaMask), a Solana wallet or a NEAR wallet, and sign the sign-in message. Signing costs nothing and sends no transaction. When the server has email configured, you can instead enter your email and select **Send a sign-in link**. The link works once and expires in 5 minutes.
+2. **Business details.** Enter your business name, which customers see on the payment page, and optionally your website and logo.
+3. **Where you get paid.** Choose a payout network: NEAR, Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, HyperEVM or Solana. Then choose the coin you receive on it, for example USDC. If you signed in with a wallet on that network, select **Use the wallet you signed in with**. Otherwise, connect the wallet that should receive your money and sign a message. The signature verifies that the wallet is yours and moves no funds. Select **Finish setup** to open your dashboard.
+
+Then open **Developers** in the dashboard, select **Create API key** and copy the key. It starts with `sk_live_` and is shown only once. Only the owner of the business can create keys.
+
+## 2. Create an invoice
+
+Send a request to `/api/v1/invoices` with your API key in the `Authorization` header. This one creates a $25 invoice:
+
+```bash
+curl https://your-solverr-host/api/v1/invoices \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1042" \
+  -d '{
+    "amount": "25.00",
+    "currency": "USD",
+    "order_id": "1042",
+    "description": "Blue T-shirt",
+    "redirect_url": "https://shop.example/thanks"
+  }'
+```
+
+The response is the new invoice. You need its `checkout_url` in the next step.
+
+```json
+{
+  "id": "inv_7h3K9dWq2LmN4pRt6vXy",
+  "object": "invoice",
+  "mode": "live",
+  "status": "created",
+  "amount": "25.00",
+  "currency": "USD",
+  "order_id": "1042",
+  "description": "Blue T-shirt",
+  "customer_email": null,
+  "redirect_url": "https://shop.example/thanks",
+  "metadata": {},
+  "settlement": {
+    "asset_id": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+    "symbol": "USDC",
+    "blockchain": "base",
+    "amount": "25",
+    "amount_base": "25000000"
+  },
+  "late": false,
+  "extra_payment": false,
+  "checkout_url": "https://your-solverr-host/pay/inv_7h3K9dWq2LmN4pRt6vXy",
+  "receipt_url": null,
+  "redeemed_at": null,
+  "expires_at": "2026-11-05T13:00:00.000Z",
+  "created_at": "2026-11-05T12:00:00.000Z"
+}
+```
+
+## 3. Open the checkout
+
+1. Open the `checkout_url` in your browser to see the page your customer sees.
+2. Choose a coin and select **Continue**.
+3. Select **Send manually**.
+4. Tick the box that confirms the network, and enter one of your addresses on that chain for refunds.
+5. Select **Show payment address**.
+
+Most coins work for $25. If NEAR Intents has a temporary minimum on a coin's route, the checkout says so at once and suggests the coin you receive instead. After the last step, the checkout shows the exact amount to send and a real one-time payment address. Anything sent to it is a real payment.
+
+You do not have to pay. An unpaid invoice expires at its `expires_at` time: one hour after creation, unless you set `expires_in`.
+
+If you pay, the status moves through **Payment detected** and **Converting** to **Paid**. The coin you receive arrives in your payout wallet, and the checkout shows **Payment complete** with a receipt link. Because this invoice has a `redirect_url`, a **Back to** button with your business name opens `https://shop.example/thanks`.
+
+<Callout type="info">
+If you run Solverr on your own server, the worker process must be running. It follows payments and sends webhooks. Without it, the status stays at the first step.
+</Callout>
+
+## 4. Check the invoice
+
+Fetch the invoice with your API key to see its current status.
+
+```bash
+curl https://your-solverr-host/api/v1/invoices/inv_7h3K9dWq2LmN4pRt6vXy \
+  -H "Authorization: Bearer sk_live_…"
+```
+
+After you open a payment address, the invoice has `"status": "awaiting_payment"`. Once a payment completes, it has `"status": "paid"` and a `receipt_url`.
+
+## Next steps
+
+<Cards>
+  <Card title="Receive webhooks" href="/docs/webhooks/events" description="Mark orders as paid from your server." />
+  <Card title="Check your webhook endpoint" href="/docs/webhooks/testing" description="Send a ping event before real payments arrive." />
+  <Card title="Add a pay button" href="/docs/integrate/script-button" description="Send customers from your site to the checkout page." />
+  <Card title="Settlement" href="/docs/payments/settlement" description="Your payout wallet and the coin you receive." />
+</Cards>

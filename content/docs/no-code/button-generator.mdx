@@ -1,0 +1,49 @@
+---
+title: Button generator
+icon: button
+description: Turn one of your payment links into a copy-paste HTML or React pay button, set its text, look and size, and optionally open the checkout in a popup.
+---
+
+The button generator in **Dashboard → Pay button** turns one of your payment links into a pay button that you paste into your website. A click on the button opens the full checkout page for that link in the same tab.
+
+## Make a button
+
+The generator starts from an existing [payment link](/docs/no-code/payment-links) and lists only links whose switch is on in **Dashboard → Payment links**. Create at least one link first, or turn an existing one back on.
+
+1. Open **Dashboard → Pay button**.
+2. Choose the **Payment link** the button opens.
+3. Type the **Button text**: up to 40 characters, "Pay with crypto" by default.
+4. Choose the **Look**: Blue, Dark or Light.
+5. Choose the **Size**: Medium or Large.
+6. Check the button in **Preview**, which updates as you change the options.
+
+## Paste the snippet
+
+Under **Code**, choose **HTML**, copy the snippet and paste it where the button belongs on your page. It looks like this:
+
+```html
+<script src="https://your-solverr-host/embed.js" async></script>
+<button data-solverr-link="lnk_8Fq2xT4mW9pL3vN7rB2s" style="background:#155dfc;color:#ffffff;border:1px solid #155dfc;padding:10px 18px;font-size:15px;border-radius:10px;font-weight:600;font-family:inherit;cursor:pointer">Pay with crypto</button>
+```
+
+For a React site, choose **React** instead:
+
+```tsx
+import { PayButton } from "solverr-react";
+
+// PayButton keeps its own blue look; pass className to style it with your CSS.
+<PayButton baseUrl="https://your-solverr-host" link="lnk_8Fq2xT4mW9pL3vN7rB2s">Pay with crypto</PayButton>
+```
+
+The **Look** and **Size** options apply only to the HTML snippet. The React `PayButton` keeps its own blue look; style it with `className` and your own CSS.
+
+The price always comes from the payment link on the server, never from the page. A visitor cannot change it by editing the HTML.
+
+## Open the checkout in a popup
+
+To keep the customer on your page, add `data-solverr-mode="overlay"` to the HTML button or `mode="overlay"` to the React `PayButton`. The checkout then opens in a popup over your page. The [script button](/docs/integrate/script-button#open-the-checkout-in-a-popup) page explains how the popup behaves.
+
+## Next steps
+
+- [Script button](/docs/integrate/script-button): open invoices your server creates, or open the checkout in a popup and listen for the `solverr:paid` event.
+- [React component](/docs/integrate/react): see all `PayButton` props.

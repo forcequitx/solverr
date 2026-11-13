@@ -1,0 +1,54 @@
+---
+title: Revenue splits
+icon: split
+description: Share a percentage of every paid invoice with partners. Solverr prepares one pending payout per split, and you approve each one from your wallet.
+---
+
+A revenue split sends a percentage of every paid invoice to someone else, such as a co-founder, a partner or an affiliate. Solverr never holds money, so a split moves nothing on its own. When an invoice is paid, Solverr prepares one pending payout per split in the coin you receive, and you approve each one from your payout wallet.
+
+## Set up a split
+
+1. Verify your payout wallet in **Dashboard → Settings → Payout wallet**.
+2. In **Dashboard → Settings → Revenue splits**, enter a **Name** such as "Co-founder", the **Recipient wallet** and the **Percent**.
+3. Select **Add**.
+
+Splits are paid in the coin you receive on your payout network. Solverr uses that network to check the recipient, and each split keeps the network it was added for. The list shows every split with its network and share, the total you share and the part you keep.
+
+To stop a split, select **Remove** next to it. Splits are managed in the dashboard only; the API has no endpoint for them.
+
+## When an invoice is paid
+
+1. The moment an invoice becomes `paid`, Solverr creates one pending payout per split. These payouts share one `batch_id`, and their `invoice_id` is the paid invoice.
+2. Each payout is the split's percent of the invoice's settlement amount in the coin you receive, rounded down to the coin's smallest unit. A share that rounds to zero is skipped.
+3. You get a dashboard alert such as "2 split payouts for invoice inv_7h3K9dWq2LmN4pRt6vXy are ready to approve in Refunds & payouts."
+4. Open **Dashboard → Refunds & payouts**, open each payout, connect your payout wallet, select **Send from your wallet**, and approve the transfer in your wallet.
+5. The recipient gets the coin you receive straight from your wallet. No swap is needed, so NEAR Intents route minimums do not apply.
+6. When the transfer arrives, the payout becomes `completed` and you get a `payout.completed` webhook.
+
+```text
+Invoice paid: 100.00 USDC on Base
+Split "Co-founder" 10%   → pending payout of 10.00 USDC
+Split "Affiliate" 2.5%   → pending payout of 2.50 USDC
+You keep the rest; nothing leaves your wallet until you approve each payout.
+```
+
+<Callout type="info">
+Nothing is sent automatically. The full payment stays in your payout wallet until you approve a split payout.
+</Callout>
+
+[Payouts](/docs/payments/payouts) explains how approving a payout works and lists its statuses.
+
+## Rules and limits
+
+- **Recipient.** The recipient must be a valid address on your payout network: with a payout wallet on Base, for example, an EVM address. If you later move your payout wallet to another network, even one with the same address format such as Base to Arbitrum, Solverr skips the splits added for the old network, marks them in the list and tells you in a dashboard alert. The same address can belong to someone else on another network, so remove the split and add it again with an address the recipient uses on the new network.
+- **Percent.** Each percent must be greater than 0 and at most 100, with up to 2 decimals such as `10` or `2.5`. All splits together can be at most 100%.
+- **Name.** A name can have at most 60 characters.
+- **Who can change splits.** Only the owner can add or remove splits; teammates can see them. Adding a split raises a dashboard alert and, when email is set up, emails the owner.
+
+## Points that cause confusion
+
+- **Every paid invoice counts.** Splits apply to each invoice that becomes paid: from the API, a payment link, a subscription, the paywall or a credit top-up.
+- **A second payment on a paid invoice.** It does not create split payouts. Handle it as an [extra payment](/docs/help/payment-mistakes#7-the-customer-paid-twice).
+- **Refunds.** When you refund the payment that paid an invoice, its split payouts that you have not started sending (no **Send from your wallet** yet) shrink to their share of what you keep. For example, after a 40.00 refund of a 100.00 USDC payment, a 10% split becomes 6.00 USDC. After a full refund, they wait at 0 until the refund completes, then are canceled with a `payout.canceled` webhook. If a refund fails or you cancel it, the split payouts grow back. Split payouts you already started sending do not change; settle those with the recipient yourself.
+- **Adding or removing a split.** The change affects only invoices paid afterwards. Payouts already created stay in **Refunds & payouts** with their original amount and recipient.
+- **The API sees them too.** Split payouts are ordinary payouts, so `GET /api/v1/payouts` lists them with their `invoice_id`.

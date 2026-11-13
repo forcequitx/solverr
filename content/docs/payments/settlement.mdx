@@ -1,0 +1,77 @@
+---
+title: Settlement and payout wallet
+icon: payments
+description: Verify the wallet that receives your payments, choose the coin you receive, and see how Solverr fixes each invoice's settlement amount.
+---
+
+Settlement is what you receive for each payment: a fixed amount of the coin you chose, delivered by NEAR Intents to your own wallet. The amount is fixed when the invoice is created, and Solverr never holds the money.
+
+## Verify your payout wallet
+
+Solverr pays only to a wallet you verified as yours. You cannot type in an address, so a typo or a pasted lookalike address cannot redirect your revenue.
+
+1. Open **Dashboard → Settings → Payout wallet**, or step 3 of setup.
+2. Choose the payout network: NEAR, Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, HyperEVM or Solana. These are the chains marked in the **Payouts** column of [Chains and coins](/docs/payments/chains-and-coins#supported-chains).
+3. Connect the wallet on that network.
+4. Sign the message your wallet asks for.
+
+Signing costs nothing and moves no funds. EVM wallets use Sign-In with Ethereum, Solana wallets use Sign-In with Solana, and NEAR wallets use NEP-413. Solverr checks the signature and saves the address as your payout wallet. You need one before you can create an API key.
+
+During setup, if you signed in with a wallet on the payout network, you can select **Use the wallet you signed in with** instead of steps 3 and 4. Solverr saves it without another signature, because the sign-in signature already verified it. Smart-contract wallets, such as Safe, always sign again on the payout network, because the same address can belong to someone else on another network.
+
+### When the payout wallet changes
+
+Every change needs a signature from the new wallet, given now or when you signed in with it. You cannot change the wallet while a refund, payout or Earn withdrawal is being sent from the current one. Solverr then answers "A transfer is being sent from your current payout wallet. Record or cancel it in Refunds & payouts first, then change the wallet." After a change, Solverr adds a dashboard alert; switching networks during setup, before you select **Finish setup**, is not counted as a change. When email is configured and your account has an email address, it also sends an email. If you did not make the change, sign in and change it back at once.
+
+<Callout type="warn">
+Saving a new payout wallet retires every open payment address of your business. Open checkouts stop showing the old address, and the customer gets a new one that pays your new wallet. A payment already sent to an earlier address still arrives in your old wallet, and Solverr keeps watching retired addresses for 24 hours, so keep your old wallet for at least 24 hours after the change.
+
+Existing invoices keep the coin and chain they were created with. When you move your payout wallet to a different network, open invoices from the old network can no longer be paid. The API refuses their quotes with `409 invalid_state`, and the checkout tells the customer that the payment cannot be started. Wait until your open invoices are paid or expired before you change networks.
+</Callout>
+
+## Choose the coin you receive
+
+In **Dashboard → Settings → Coin you receive**, or step 3 of setup, choose one of these options on your payout network:
+
+- **USDC** or **USDT** on that network, when NEAR Intents lists them
+- The network's **native coin**, such as ETH on Base or SOL on Solana
+- **Earn** vault shares, when NEAR Intents lists a vault on that network (see [Earn](/docs/payments/earn))
+
+When you verify a wallet on a different network and your current coin is not available there, Solverr switches you to the first option on the new network, usually USDC.
+
+A **Recommended** tag in the network or coin list marks the option most customers can pay from $1, measured by Solverr. [Route minimums](/docs/payments/chains-and-coins#route-minimums) explains how it is measured and when it appears.
+
+## How much you receive
+
+Solverr sets each invoice's settlement amount when the invoice is created:
+
+1. An amount in EUR or INR is converted to USD with the ECB reference rate. The ECB publishes it once per working day, and Solverr reads it again every hour.
+2. If your coin is USDC, USDT or DAI, 1 USD is 1 coin.
+3. For any other coin, the USD amount is divided by the coin's current USD price.
+
+The invoice's `settlement` object shows the coin and the exact amount. The customer pays what their coin costs to deliver that amount, including the NEAR Intents fee, so fees never reduce what you receive.
+
+```json
+"settlement": {
+  "asset_id": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+  "symbol": "USDC",
+  "blockchain": "base",
+  "amount": "25",
+  "amount_base": "25000000"
+}
+```
+
+## Fees
+
+| Who | Fee |
+|---|---|
+| Solverr | 0% |
+| NEAR Intents, with a partner key on the server | 0.2% per swap, or 0.01% between stablecoins (USDC, USDT, DAI) and for the same coin on another chain |
+| NEAR Intents, without a partner key | 0.25% extra |
+
+The customer pays these fees on top of the invoice amount, along with the network fee of their own transfer.
+
+## Try the payment flow
+
+- **With real money.** Create a $1 payment link in **Dashboard → Payment links** and pay it yourself. You see the whole flow, and the money arrives in your own payout wallet.
+- **Without money.** Open the demo store at `https://your-solverr-host/demo` to see the checkout without paying.

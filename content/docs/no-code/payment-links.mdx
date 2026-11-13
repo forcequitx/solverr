@@ -1,0 +1,73 @@
+---
+title: Payment links
+icon: links
+description: Create a reusable fixed-price payment link in the dashboard or with the API, share it or its QR code, and see what customers see when they pay.
+---
+
+A payment link is a reusable URL with a fixed price, and every visit to it creates a new invoice. It gets you paid without a website or code: share it in a message, a social post or an invoice PDF, or print its QR code and put it on a counter.
+
+## Create a link in the dashboard
+
+Your business needs a verified payout wallet before it can create links. Only the owner can verify one, in **Dashboard → Settings → Payout wallet**.
+
+1. Open **Dashboard → Payment links**.
+2. Under **What is it for?**, enter a title, for example "Flat white". The payment link and checkout pages do not show it; it names the link and its payments in your dashboard.
+3. Enter the **Amount** with up to 2 decimals, and choose the **Currency**: USD, EUR or INR.
+4. To send customers back to your site after they pay, enter that address under **After payment, send customers to (optional)**.
+5. Select **Create link**.
+6. Select the copy button next to the new link.
+7. For a printable QR code, select the QR code button, then **Copy QR image**.
+
+The link looks like `https://your-solverr-host/l/lnk_8Fq2xT4mW9pL3vN7rB2s`.
+
+## Create a link with the API
+
+```bash
+curl https://your-solverr-host/api/v1/payment-links \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Flat white","amount":"4.50","currency":"EUR"}'
+```
+
+```json
+{
+  "id": "lnk_8Fq2xT4mW9pL3vN7rB2s",
+  "object": "payment_link",
+  "mode": "live",
+  "url": "https://your-solverr-host/l/lnk_8Fq2xT4mW9pL3vN7rB2s",
+  "title": "Flat white",
+  "amount": "4.50",
+  "currency": "EUR",
+  "redirect_url": null,
+  "active": true,
+  "created_at": "2026-11-05T12:00:00.000Z"
+}
+```
+
+`GET /api/v1/payment-links` lists your links, newest first. `DELETE /api/v1/payment-links/:id` turns a link off and returns it with `"active": false`.
+
+## What the customer sees
+
+1. The customer opens the link and sees your logo (or your initials when you have not uploaded one), your business name and the amount due.
+2. They select **Continue to payment**. Solverr creates a new invoice for this visit.
+3. They choose a coin and pay on the normal checkout page.
+4. After paying, they see **Payment complete** and a link to the receipt.
+
+When the link has a return address (**After payment, send customers to (optional)** in the dashboard, or `redirect_url` in the API), a **Back to** button with your business name takes the customer there. Without one, the button goes to the business website from your profile. When neither is set, the customer stays on **Payment complete**.
+
+To add your logo, open **Dashboard → Settings → Business profile**, select **Upload logo** and choose a PNG, JPEG or WebP image of up to 800 KB. Square logos look best. The logo shows on your payment link and checkout pages. **Remove** brings back your initials.
+
+Every visit creates its own invoice, so one link can be paid many times. Each payment appears in **Dashboard → Payments** and sends the usual [webhooks](/docs/webhooks/events). Invoices created from a link expire after 60 minutes, the default invoice lifetime.
+
+<Callout type="info">
+Every link takes real payments. To see what a customer sees without paying, open the demo store at `https://your-solverr-host/demo`. Its payment links use simulated payments.
+</Callout>
+
+## Turn a link off
+
+In **Dashboard → Payment links**, turn off the switch next to the link. Anyone who opens it from then on sees "This payment is not available". Turning the switch back on makes the link work again; only the dashboard can do that. Invoices already created from the link stay payable until they expire.
+
+## Next steps
+
+- [Tip links](/docs/no-code/tip-links): let the customer choose the amount.
+- [Button generator](/docs/no-code/button-generator): add a pay button for a link to your website.

@@ -1,0 +1,147 @@
+---
+title: Node SDK
+icon: package
+description: Use solverr-node to create invoices, links, refunds and payouts from a Node.js server, verify webhooks, and handle errors, retries and idempotency.
+---
+
+`solverr-node` is the Solverr API client for Node.js servers. It covers invoices, payment links, refunds, payouts, subscriptions, credits and the list of accepted coins, and verifies webhooks. Request and response fields keep the API's own names, such as `order_id` and `checkout_url`, so the [API reference](/docs/api) applies as written.
+
+## Install
+
+```bash
+npm install solverr-node
+```
+
+The package needs Node 22.12 or later and has no runtime dependencies. It is an ES module. Load it with `import`, or from CommonJS with `require("solverr-node")`, because Node 22.12 and later load ES modules through `require()`. In a TypeScript CommonJS project, set `module` to `nodenext` or `node20` in `tsconfig.json` so the compiler accepts that `require()`.
+
+## Create an invoice
+
+```ts
+import { Solverr } from "solverr-node";
+
+const solverr = new Solverr({
+  apiKey: process.env.SOLVERR_SECRET_KEY, // sk_live_…
+  baseUrl: process.env.SOLVERR_URL, // https://your-solverr-host
+});
+
+const invoice = await solverr.invoices.create({
+  amount: "25.00",
+  currency: "USD",
+  order_id: "1042",
+  redirect_url: "https://shop.example/thanks",
+});
+
+// Redirect the customer to invoice.checkout_url
+```
+
+Keep the API key on your server only. Leave out `baseUrl` when the `SOLVERR_URL` environment variable is set. The base URL must use `https`; plain `http` is accepted only for `localhost`, `127.0.0.1` and `[::1]`.
+
+`invoices.create` also accepts four optional fields: `description`; `customer_email`, the address that gets the receipt; `metadata`, up to 20 string keys and values returned on the invoice; and `expires_in`, the invoice lifetime in seconds, from 900 to 86400 (default 3600).
+
+## Confirm payment with a webhook
+
+Pass the raw request body to `verify` exactly as it arrived. JSON that was parsed and serialized again no longer matches the signature.
+
+```ts
+import express from "express";
+import { Webhooks, WebhookVerificationError } from "solverr-node";
+
+const webhooks = new Webhooks();
+const app = express();
+
+app.post("/webhooks/solverr", express.raw({ type: "application/json" }), (req, res) => {
+  let event;
+  try {
+    event = webhooks.verify(req.body, req.headers, process.env.SOLVERR_WEBHOOK_SECRET!);
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) return res.status(400).send(error.message);
+    throw error;
+  }
+
+  if (event.type === "invoice.paid") {
+    markOrderPaid(event.data.invoice.order_id);
+  }
+  res.sendStatus(200);
+});
+```
+
+`SOLVERR_WEBHOOK_SECRET` holds the signing secret from **Dashboard → Developers**. `new Webhooks()` needs no API key, so your webhook endpoint does not need one either. If you already have a client, `solverr.webhooks.verify` runs the same check.
+
+In a Next.js route handler, pass `await request.text()` as the body and `request.headers` as the headers. [Verify signatures](/docs/webhooks/verify-signatures) explains what `verify` checks.
+
+## Grant access once per paid invoice
+
+Call `invoices.redeem(id)` before you deliver a download or open paid content. It marks the paid invoice as used, so one payment cannot be used twice.
+
+```ts
+import { SolverrError } from "solverr-node";
+
+try {
+  await solverr.invoices.redeem(invoiceId);
+  // deliver the content
+} catch (error) {
+  if (error instanceof SolverrError && error.status === 409) {
+    // error.type is "invalid_state" (not paid) or "already_redeemed"
+  }
+}
+```
+
+## Resources
+
+| Call | Endpoint |
+|---|---|
+| `invoices.create(params, { idempotencyKey? })` | `POST /api/v1/invoices` |
+| `invoices.retrieve(id)` | `GET /api/v1/invoices/:id` |
+| `invoices.list({ limit?, starting_after?, status? })` | `GET /api/v1/invoices` |
+| `invoices.listAll(params?)` | Async iterator over every matching invoice, fetching the next page as the loop goes on |
+| `invoices.redeem(id)` | `POST /api/v1/invoices/:id/redeem` |
+| `paymentLinks.create({ title, amount?, currency, redirect_url? })`, `paymentLinks.list()` | `/api/v1/payment-links` |
+| `paymentLinks.deactivate(id)` | `DELETE /api/v1/payment-links/:id` |
+| `refunds.create({ invoice_id, payment_id?, amount? })`, `refunds.retrieve(id)`, `refunds.list()`, `refunds.cancel(id)` | `/api/v1/refunds` |
+| `payouts.create({ recipient, asset_id, amount })`, `payouts.retrieve(id)`, `payouts.list()`, `payouts.cancel(id)` | `/api/v1/payouts` |
+| `payouts.createBatch({ payouts: [{ recipient, asset_id, amount }, …] })` | `POST /api/v1/payouts/batch` |
+| `subscriptions.create({ customer_email, amount, currency, interval, description? })`, `subscriptions.list()` | `/api/v1/subscriptions` |
+| `subscriptions.cancel(id)` | `DELETE /api/v1/subscriptions/:id` |
+| `credits.topup({ amount, currency: "USD", credit_account_id? })` | `POST /api/v1/credits/topup` |
+| `credits.charge({ token, amount, currency?, description? })` | `POST /api/v1/credits/charge` |
+| `credits.refundCharge(id)` | `POST /api/v1/credits/charges/:id/refund` |
+| `tokens.list()` | `GET /api/v1/tokens` |
+| `webhooks.sendTest()` | `POST /api/v1/webhooks/test` |
+| `webhooks.verify(rawBody, headers, secret, { toleranceSeconds? })` | Local check, no request |
+
+Every `create`, `createBatch`, `topup`, `charge`, `refundCharge` and `redeem` call, and `refunds.cancel` and `payouts.cancel`, takes `{ idempotencyKey }` as its last argument.
+
+By default, `refunds.create` refunds the payment that paid the invoice. To refund an extra payment on the same invoice, pass its id as `payment_id`. Leave out `amount` to refund what is left of that payment.
+
+The `asset_id` of a payout is the coin the recipient receives. Take it from `tokens.list()`, which returns every coin the checkout accepts, with its chain, decimals and USD price.
+
+### Pagination
+
+Every list call except `tokens.list()` returns a page with `object`, `data` and `has_more`. For the next page, pass the last item's id as `starting_after`, or let `listAll` loop over every page:
+
+```ts
+for await (const invoice of solverr.invoices.listAll({ status: "paid" })) {
+  console.log(invoice.id, invoice.amount);
+}
+```
+
+`tokens.list()` returns every coin in one response with `object` and `data`, without pages.
+
+## Errors and retries
+
+API errors throw `SolverrError` with `status`, `type`, `message`, `param` (the invalid field), `code` (a finer reason when the API adds one; none of the endpoints this SDK calls send one today) and `retryAfter` (the seconds the API asked you to wait, for example on a `429`). When the API cannot be reached, `status` is `0` and `type` is `connection_error`.
+
+Each attempt times out after 15 seconds, counting the response headers and body. The SDK retries timeouts, network errors and 5xx responses twice with a growing delay, so one call can take up to about 47 seconds; `Retry-After` waits add to that. A `429` (rate limit), or a `409` saying that an earlier request with the same `Idempotency-Key` is still being processed, is retried up to three times after the wait in its `Retry-After` header. When `Retry-After` asks for more than 10 seconds, the SDK throws the error at once instead.
+
+### Idempotency keys
+
+Every POST carries an `Idempotency-Key` header, generated when you do not pass one. Every retry sends the same key, so a retried POST never creates a second object. Pass your own key to make retries safe across process restarts too. A key belongs to your business across every endpoint for 24 hours, so give each operation its own key: for example `invoice-order-1042` for the invoice of order 1042 and `refund-order-1042` for its refund, not the order id alone.
+
+If you send a key again with a different request (another body or another endpoint), the API answers `409` with type `idempotency_conflict`, and the SDK throws it without retrying.
+
+```ts
+const invoice = await solverr.invoices.create(
+  { amount: "25.00", currency: "USD", order_id: "1042" },
+  { idempotencyKey: "invoice-order-1042" },
+);
+```

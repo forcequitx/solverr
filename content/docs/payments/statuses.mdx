@@ -1,0 +1,91 @@
+---
+title: Invoice and payment statuses
+icon: activity
+description: Every status an invoice, payment, refund, payout, subscription and support case can have, how an invoice moves between them, and what to do at each.
+---
+
+An invoice is what the customer owes. A payment is one attempt to pay it, with one coin and one deposit address. An invoice can have several payments, for example when the customer changes coin or a quote expires, and the first payment that succeeds pays the invoice.
+
+## Invoice statuses
+
+| Status | Meaning | What to do |
+|---|---|---|
+| `created` | The invoice exists, but the customer has not chosen a coin yet | Wait |
+| `awaiting_payment` | A deposit address was issued | Wait |
+| `detected` | The customer's payment was seen on its chain | Wait, and do not ship yet |
+| `processing` | NEAR Intents is converting the payment | Wait, and do not ship yet |
+| `paid` | The coin you receive arrived in your payout wallet | Ship the order |
+| `underpaid` | Too little arrived, and NEAR Intents refunds it to the customer | Nothing; the customer can try again after the refund |
+| `refunded` | The customer's payment was returned to their refund address | Nothing; the customer can try again |
+| `failed` | The conversion failed, and a support case was opened | Check **Dashboard → Support** |
+| `expired` | The invoice lifetime passed with no payment | Create a new invoice if the customer still wants to pay |
+
+### How an invoice moves
+
+1. `created` becomes `awaiting_payment` when the customer gets a deposit address.
+2. `awaiting_payment` becomes `detected`, then `processing`, then `paid`. A short step can be skipped.
+3. When too little is sent, `awaiting_payment` becomes `underpaid`, then `refunded` once the refund is done.
+4. From `refunded` or `failed`, the customer can choose a coin again while at least 2 minutes of the invoice lifetime are left. The invoice then returns to `awaiting_payment`.
+5. `created` and `awaiting_payment` become `expired` when the lifetime ends.
+6. `expired` can still become `paid` if a payment to an address from this invoice arrives within 24 hours. The invoice then has `late: true`.
+
+`paid` is final. A later successful payment only sets the `extra_payment` flag.
+
+## Flags on a paid invoice
+
+| Flag | Meaning | What to do |
+|---|---|---|
+| `late` | The payment arrived on an address that was already replaced or expired, or after the invoice expired | Complete the order, or refund it |
+| `extra_payment` | A second payment for this invoice also succeeded | Select **Refund this extra payment** on the invoice's page in **Dashboard → Payments** |
+
+Both flags come with a webhook: `invoice.paid` (with `late: true`) and `invoice.extra_payment`.
+
+## Payment statuses
+
+The `payment` object carries the NEAR Intents status in lowercase. The quote and status endpoints return it, and invoice webhooks include it.
+
+| Status | Meaning |
+|---|---|
+| `pending_deposit` | Waiting for the customer to send |
+| `known_deposit_tx` | The transfer was seen on its chain |
+| `processing` | NEAR Intents is converting it |
+| `incomplete_deposit` | Too little arrived, and a refund follows |
+| `success` | Delivered to your wallet |
+| `refunded` | Returned to the customer's refund address |
+| `failed` | The conversion failed |
+
+### Payment states
+
+On the checkout status endpoint, the payment also has a `state`:
+
+| State | Meaning |
+|---|---|
+| `active` | The current deposit address |
+| `retired` | Replaced or expired, but still watched for 24 hours in case a payment arrives |
+| `final` | Reached `success`, `refunded` or `failed`, or was watched for 24 hours with no payment |
+
+A deposit address is valid for 20 minutes, or until the invoice expires if that comes sooner. When it runs out, the checkout hides the address and shows "This address expired. Do not send to it." with a **Get a new address** button, so an old address is never shown again. A new address is created only when the customer selects that button.
+
+## Refund and payout statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | Created and waiting for you to approve it from your wallet |
+| `processing` | Your wallet sent it, and Solverr is waiting for the transaction to be final on-chain (same coin) or for the swap to finish (different coin) |
+| `completed` | The recipient received it, checked on-chain |
+| `failed` | The transaction failed or never appeared on-chain, it sent something else, or the swap did not complete (your coin then went back to your wallet) |
+| `canceled` | Canceled before it was sent; nothing left your wallet |
+
+## Subscription statuses
+
+| Status | Meaning |
+|---|---|
+| `active` | Creates an invoice every interval |
+| `canceled` | Creates no more invoices |
+
+## Support case statuses
+
+| Status | Meaning |
+|---|---|
+| `open` | Waiting for you or NEAR Intents support |
+| `resolved` | You marked it as resolved in **Dashboard → Support** |

@@ -1,0 +1,30 @@
+# Worker image; also runs database migrations. Build from the repository root:
+#   docker build -f deploy/Dockerfile.worker .
+
+# Exact Node release and digest.
+FROM node:24.22.2-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
+WORKDIR /app
+
+# Current Debian security updates, and the OpenSSL the Prisma schema engine used by `migrate deploy` needs.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Development dependencies are kept: tsx runs the worker and the Prisma CLI runs migrations.
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+# prisma7.config.ts reads DATABASE_URL; generate never connects, so a placeholder is enough.
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" node_modules/.bin/prisma generate
+
+# npm and corepack are only needed to install; the worker and migrations run their binaries directly, and removing them
+# drops the packages bundled inside npm from the running image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
+ENV NODE_ENV=production
+USER node
+# tsx is started directly, not through npx, so SIGTERM reaches the worker and it stops cleanly.
+CMD ["node_modules/.bin/tsx", "worker/index.ts"]

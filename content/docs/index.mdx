@@ -1,0 +1,53 @@
+---
+title: What Solverr is
+icon: book
+description: What Solverr is, how a payment moves from the checkout through NEAR Intents to your wallet, and which fees the payer pays.
+---
+
+Solverr is a non-custodial crypto payment gateway built on NEAR Intents. People and AI agents pay you in coins they already hold, on any of the [chains Solverr accepts](/docs/payments/chains-and-coins#supported-chains), and NEAR Intents delivers the coin you chose to your own wallet.
+
+## What you get
+
+- **Non-custodial payments.** Funds move from the payer to a one-time NEAR Intents payment address, then to your wallet. Solverr never holds funds or private keys.
+- **No gateway fee.** Solverr charges 0%. The payer pays only the NEAR Intents swap fee and the network fee of their own transfer (see [Fees](#fees)).
+- **A verified payout wallet.** Solverr pays out only to a wallet you connected and signed a message with, so a typo cannot send your revenue to someone else.
+- **Mistake protection.** On-chain transfers cannot be reversed. The checkout blocks common sending mistakes, such as a wrong network, a wrong amount or a missing memo, before the customer sends anything.
+- **People and AI agents.** Customers pay through the hosted checkout. AI agents pay through the 402 paywall or the MCP server. Every one of these creates an ordinary invoice.
+
+## How a payment flows
+
+1. You create an invoice from your server with `POST /api/v1/invoices`, or the customer opens one of your payment links. Either way, the invoice has a `checkout_url`.
+2. The customer opens the checkout page, chooses a network, then chooses a coin from that network's list, such as "Coins on TRON". The payment step names both, for example "USDT on TRON".
+3. Solverr asks NEAR Intents for a quote for the exact amount you receive. The customer gets a one-time payment address, the exact amount to send and a 20-minute countdown.
+4. The customer pays from a connected wallet, or confirms the network, enters a refund address and sends the amount manually. EVM, Solana and NEAR wallets can pay any coin on their chain. Bitcoin, TRON and TON wallets pay only the chain's own coin (BTC, TRX or TON).
+5. NEAR Intents converts the coin and delivers the coin you receive to your payout wallet.
+6. The Solverr worker follows the payment and moves the invoice from `awaiting_payment` to `detected`, `processing` and `paid`.
+7. Your server receives a signed `invoice.paid` webhook. The customer sees a receipt and can return to your site.
+
+When something goes wrong, such as too little sent, a late payment or a payment sent twice, the invoice gets a matching status or flag and you get a webhook. [Invoice and payment statuses](/docs/payments/statuses) lists each case and the status or flag it sets.
+
+## Fees
+
+| Who | Fee |
+|---|---|
+| Solverr | 0% |
+| NEAR Intents (1Click) swap fee, with a partner key on the server | 0.2% per swap, or 0.01% between stablecoins (USDC, USDT, DAI) and for the same coin on another chain |
+| NEAR Intents without a partner key | 0.25% extra |
+| Network fee | The payer pays the gas of their own transfer |
+
+The invoice amount is what you receive. The customer sends a little more to cover the swap fee and a small price buffer, and NEAR Intents returns the part of the buffer that was not needed.
+
+<Callout type="warn">
+A NEAR Intents route can have a temporary minimum that changes without notice. The checkout shows each coin's minimum and does not let the customer choose a coin that cannot pay the invoice amount. [Chains and coins](/docs/payments/chains-and-coins#route-minimums) explains what the customer sees.
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Quickstart" href="/docs/quickstart" description="Your first invoice in five minutes." />
+  <Card title="No-code payment links" href="/docs/no-code/payment-links" description="A link you can share anywhere, with no server code." />
+  <Card title="Pay button for any website" href="/docs/integrate/script-button" description="One script tag and one button." />
+  <Card title="Node SDK" href="/docs/integrate/node-sdk" description="Create invoices and verify webhooks from your server." />
+  <Card title="Charge AI agents" href="/docs/agents/overview" description="Let agents pay per request with HTTP 402." />
+  <Card title="API reference" href="/docs/api" description="Every endpoint, generated from the OpenAPI file." />
+</Cards>

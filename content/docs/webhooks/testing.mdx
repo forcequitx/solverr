@@ -1,0 +1,58 @@
+---
+title: Test your webhook endpoint
+icon: flask
+description: Send a test.ping event from the dashboard or the API, read your server's answer in the delivery log, and check your endpoint before taking real orders.
+---
+
+Send a `test.ping` event from the dashboard or the API, then follow it in the **Delivery log**. It shows whether your endpoint receives and verifies events, without waiting for a real payment.
+
+## Send a ping event
+
+In **Dashboard → Developers**, on the **Webhook** card, select **Send ping event**. The owner and developers see the button once a webhook URL is saved; viewers do not. The button is hidden while webhooks are stopped after your endpoint answered `410 Gone` (see [Turning webhooks off from your server](/docs/webhooks/retries#turning-webhooks-off-from-your-server)).
+
+Within a few seconds, a `test.ping` event arrives at your webhook URL and appears in the **Delivery log**:
+
+```json
+{
+  "id": "evt_5tR8mW2xQpL7vN3kB9sZ",
+  "type": "test.ping",
+  "mode": "live",
+  "created_at": "2026-11-05T12:00:00.000Z",
+  "data": { "message": "This is a ping event from Solverr." }
+}
+```
+
+To send the same event from code, send a request with your API key:
+
+```bash
+curl -X POST https://your-solverr-host/api/v1/webhooks/test \
+  -H "Authorization: Bearer sk_live_…"
+```
+
+The request returns `202` with `"queued": true`, or `409` when no webhook URL is saved or webhooks are stopped after a `410 Gone`. You can send up to 10 ping events per minute; the dashboard button counts toward the same limit.
+
+A ping event is signed like every other event, so it shows whether your endpoint reads the raw body and verifies the signature. Handle `test.ping` by answering with a 2xx status and doing nothing else.
+
+## Check your server's answer
+
+The **Delivery log** shows the response code or error of the last attempt. When your server answered with an error, fix the problem and select **Resend**.
+
+## Test invoice events
+
+Invoice events such as `invoice.detected` and `invoice.paid` arrive only with real payments. To see them end to end, pay a small payment link or invoice of your own, and watch the events appear in the **Delivery log**.
+
+To see `invoice.expired`, create an invoice with `"expires_in": 900` and leave it unpaid for 15 minutes.
+
+## Receive events on your own machine
+
+Solverr delivers only to public `https` addresses. To receive events on your laptop, expose your local server through a public HTTPS tunnel and save the tunnel URL as your webhook URL while you build.
+
+There is one webhook URL per business, so save your production URL before you take real orders. When you run Solverr itself in development mode on the same machine, you can save `http://localhost` directly.
+
+## Checklist before taking real orders
+
+- Your endpoint verifies the signature with the raw body, as shown in [Verify signatures](/docs/webhooks/verify-signatures).
+- It ignores events whose `id` it already handled.
+- It ships goods only for `invoice.paid` events.
+- It answers with a 2xx status within 10 seconds.
+- Your production webhook URL is saved in **Dashboard → Developers**, and its signing secret is in `SOLVERR_WEBHOOK_SECRET` on your production server.

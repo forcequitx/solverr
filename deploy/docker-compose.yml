@@ -1,0 +1,303 @@
+# Back end on one VPS: Postgres, PgBouncer, the worker, migrations, GlitchTip and Caddy for GlitchTip; the website runs on Vercel and
+# reaches Postgres through PgBouncer over TLS (README, "Deployment"). Settings come from deploy/.env (copy deploy/.env.example). From the repository root:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+
+name: solverr
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-worker-build: &worker-build
+  context: ..
+  dockerfile: deploy/Dockerfile.worker
+
+x-postgres-build: &postgres-build
+  context: ..
+  dockerfile: deploy/Dockerfile.postgres
+
+x-app-env: &app-env
+  - path: .env
+    required: true
+
+x-no-new-privileges: &no-new-privileges
+  - no-new-privileges:true
+
+# The superuser, solverr and glitchtip passwords (postgres.env, also loaded by postgres) and solverr_web's (pgbouncer.env, also
+# loaded by pgbouncer); only db-roles loads both.
+x-db-roles-env: &db-roles-env
+  - path: postgres.env
+    required: true
+  - path: pgbouncer.env
+    required: true
+
+# worker and migrate start only once the roles and databases exist.
+x-app-depends-on: &app-depends-on
+  postgres:
+    condition: service_healthy
+  db-roles:
+    condition: service_completed_successfully
+
+services:
+  postgres:
+    # The pinned postgres:17.11 image plus WAL-G (deploy/Dockerfile.postgres).
+    image: solverr-postgres
+    build: *postgres-build
+    # The superuser password, and WAL-G's bucket and encryption settings (only needed once PG_ARCHIVE_MODE is on).
+    env_file:
+      - path: postgres.env
+        required: true
+      - path: walg.env
+        required: false
+    restart: unless-stopped
+    # The entrypoint drops from root to the postgres user, which no-new-privileges allows.
+    security_opt: *no-new-privileges
+    # Only what the entrypoint needs to fix data-directory ownership and switch to the postgres user (tested with 17.11).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    # One process per connection plus background workers: max_connections below, and room for maintenance.
+    pids_limit: 512
+    # Not published: the worker, migrations, db-roles and GlitchTip reach it on backend, the website only through pgbouncer on pooler.
+    networks: [backend, pooler]
+    # Memory is sized for a 12 GB VPS; the cache settings follow the 5 GB limit. No CPU cap: it may use every core and wins under contention.
+    mem_limit: 5g
+    cpu_shares: 2048
+    # Docker's default 64 MB /dev/shm is too small for parallel queries.
+    shm_size: 256mb
+    # Time for the shutdown checkpoint, so the next start needs no crash recovery.
+    stop_grace_period: 60s
+    # max_locks_per_transaction=512 is for GlitchTip. max_connections stays above solverr_web's CONNECTION LIMIT 150 (deploy/db-roles.sql);
+    # the README restore command repeats both. A slot is taken before login, so authentication_timeout frees slots of clients that never finish it.
+    # PG_ARCHIVE_MODE=on only once deploy/walg.env works, or WAL fills the disk. No TLS: only the server's own containers connect.
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - authentication_timeout=10s
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - shared_buffers=1280MB
+      - -c
+      - effective_cache_size=3840MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - max_locks_per_transaction=512
+      - -c
+      - archive_mode=${PG_ARCHIVE_MODE:-off}
+      - -c
+      - archive_command=timeout 600 wal-g wal-push %p
+      - -c
+      - archive_timeout=300
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    # The image's default superuser is postgres; the app's own solverr role is created by db-roles.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+
+  # The website's way in from the internet: PgBouncer checks TLS and the solverr_web password itself and opens a Postgres connection
+  # only for a client that has logged in (deploy/pgbouncer.ini), so connections that never log in cannot fill Postgres.
+  pgbouncer:
+    # PgBouncer from the PostgreSQL project's packages on the pinned postgres:17.11 base (deploy/Dockerfile.pgbouncer).
+    image: solverr-pgbouncer
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.pgbouncer
+    # Only solverr_web's password; the superuser's and the other roles' never reach this internet-facing container.
+    env_file:
+      - path: pgbouncer.env
+        required: true
+    # Writes PgBouncer's password file into memory-only /run/pgbouncer, then replaces the shell with PgBouncer.
+    command:
+      - sh
+      - -c
+      - umask 077 && printf '"solverr_web" "%s"\n' "$${SOLVERR_WEB_DB_PASSWORD:?Set SOLVERR_WEB_DB_PASSWORD in deploy/pgbouncer.env}" > /run/pgbouncer/userlist.txt && exec pgbouncer /etc/pgbouncer/pgbouncer.ini
+    restart: unless-stopped
+    # Runs as the image's postgres user (uid 999), which owns deploy/postgres-tls/server.key, with no capabilities at all.
+    security_opt: *no-new-privileges
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /run/pgbouncer:uid=999,gid=999,mode=0700,size=1m
+    # One process. max_client_conn=5000 needs about 250 MB and 5200 open files during a flood of clients that never log in.
+    mem_limit: 512m
+    pids_limit: 16
+    ulimits:
+      nofile: 8192
+    # Alone on pooler, so it is the only container that matches the pooler line of deploy/pg_hba.conf.
+    networks: [pooler]
+    # The website on Vercel connects here over TLS. IPv4 only, since Docker forwards published IPv6 through its proxy.
+    ports:
+      - "0.0.0.0:5432:5432"
+    volumes:
+      - ./pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer_hba.conf:/etc/pgbouncer/pgbouncer_hba.conf:ro
+      - ./postgres-tls:/etc/pgbouncer/tls:ro
+    # A plain connection gets PgBouncer's "SSL required" answer, which proves it is up without a client certificate; Postgres is never asked.
+    healthcheck:
+      test: ["CMD", "pg_isready", "--host=127.0.0.1", "--dbname=dbname=solverr sslmode=disable", "--username=healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # Starts once solverr_web exists with its current password and role settings.
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
+    logging: *logging
+
+  migrate:
+    # Built by the worker service; two services building one image at once fail with "already exists".
+    image: solverr-worker
+    pull_policy: never
+    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
+    env_file: *app-env
+    restart: "no"
+    mem_limit: 512m
+    pids_limit: 256
+    networks: [backend]
+    security_opt: *no-new-privileges
+    cap_drop: [ALL]
+    depends_on: *app-depends-on
+    logging: *logging
+
+  worker:
+    image: solverr-worker
+    build: *worker-build
+    init: true
+    restart: unless-stopped
+    env_file: *app-env
+    # Node's heap stops below the 2 GB limit, so it collects garbage instead of being killed. No CPU cap, high priority like postgres.
+    environment:
+      NODE_OPTIONS: --max-old-space-size=1536
+    mem_limit: 2g
+    cpu_shares: 2048
+    pids_limit: 256
+    security_opt: *no-new-privileges
+    cap_drop: [ALL]
+    # tsx keeps its compile cache in /tmp; nothing else is written.
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [backend]
+    # Time between SIGTERM and SIGKILL, so a running tick can finish its outside calls.
+    stop_grace_period: 60s
+    depends_on:
+      <<: *app-depends-on
+      migrate:
+        condition: service_completed_successfully
+    logging: *logging
+
+  # Creates the solverr, solverr_web and glitchtip roles and the databases as the superuser (deploy/db-roles.sql), then exits; safe on every start.
+  db-roles:
+    # Built by the postgres service; two services building one image at once fail with "already exists".
+    image: solverr-postgres
+    pull_policy: never
+    command: ["sh", "-c", "PGPASSWORD=\"$$POSTGRES_PASSWORD\" exec psql --host=postgres --username=postgres --dbname=postgres --file=/db-roles.sql"]
+    env_file: *db-roles-env
+    volumes:
+      - ./db-roles.sql:/db-roles.sql:ro
+    restart: "no"
+    mem_limit: 128m
+    pids_limit: 64
+    networks: [backend]
+    security_opt: *no-new-privileges
+    cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+
+  # GlitchTip error tracking for website and worker errors, in all-in-one mode with Postgres as its task queue (no Valkey).
+  glitchtip:
+    image: solverr-glitchtip
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.glitchtip
+    restart: unless-stopped
+    env_file:
+      - path: glitchtip.env
+        required: true
+    environment:
+      SERVER_ROLE: all_in_one
+      VALKEY_URL: ""
+      GLITCHTIP_DOMAIN: https://${GLITCHTIP_HOST:?Set GLITCHTIP_HOST in deploy/.env}
+      # The public host for the dashboard and the website's reports, and glitchtip for the worker's reports over the backend network.
+      ALLOWED_HOSTS: ${GLITCHTIP_HOST},glitchtip
+      ENABLE_USER_REGISTRATION: "False"
+      ENABLE_ADMIN: "False"
+      GLITCHTIP_ENABLE_UPTIME: "False"
+      GLITCHTIP_ENABLE_LOGS: "False"
+      GLITCHTIP_RETENTION_DAYS: "30"
+      VTASKS_CONCURRENCY: "5"
+      DATABASE_POOL_MAX_SIZE: "5"
+    volumes:
+      - glitchtip_uploads:/code/uploads
+    # Error tracking gets at most 2 cores and low priority, so it never slows payments.
+    mem_limit: 1g
+    cpus: 2
+    cpu_shares: 512
+    pids_limit: 256
+    security_opt: *no-new-privileges
+    cap_drop: [ALL]
+    # Caddy reaches it on edge for the dashboard and the website's reports; it reaches Postgres, and the worker reaches it, on backend.
+    networks: [edge, backend]
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0
+    restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 128
+    environment:
+      GLITCHTIP_HOST: ${GLITCHTIP_HOST:?Set GLITCHTIP_HOST in deploy/.env}
+    networks: [edge]
+    security_opt: *no-new-privileges
+    cap_drop: [ALL]
+    # Caddy runs as root in its image and binds ports 80 and 443.
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - glitchtip
+    logging: *logging
+
+# Caddy is only on edge and Postgres only on backend and pooler, so the public-facing proxy cannot reach the database; glitchtip is
+# on edge and backend, and PgBouncer alone with Postgres on pooler. Both database subnets are fixed because deploy/pg_hba.conf names them.
+networks:
+  edge:
+  backend:
+    ipam:
+      config:
+        - subnet: 10.89.0.0/24
+          gateway: 10.89.0.1
+  pooler:
+    ipam:
+      config:
+        - subnet: 10.89.1.0/24
+          gateway: 10.89.1.1
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+  glitchtip_uploads:

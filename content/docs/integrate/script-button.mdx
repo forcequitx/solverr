@@ -1,0 +1,127 @@
+---
+title: Script button
+icon: developers
+description: Add a Solverr pay button to any web page with one script tag and one attribute, open the checkout from your own code, or show it in a popup.
+---
+
+The script button adds a pay button to any web page, including plain HTML, WordPress or a site builder. It needs one script tag and one attribute on the button, and has no dependencies. By default, the button opens the full checkout page in the same tab. There the checkout gets the whole screen, and wallet apps and browser wallet extensions connect more reliably than inside a frame. To keep the customer on your page, [open the checkout in a popup](#open-the-checkout-in-a-popup) instead.
+
+## Add the button
+
+1. Add the script once, anywhere on the page.
+2. Add `data-solverr-link` with a payment link id to the button, or `data-solverr-invoice` with an invoice id your server created.
+
+```html
+<script src="https://your-solverr-host/embed.js" async></script>
+
+<button data-solverr-link="lnk_8Fq2xT4mW9pL3vN7rB2s">Pay with crypto</button>
+<button data-solverr-invoice="inv_7h3K9dWq2LmN4pRt6vXy">Pay invoice</button>
+```
+
+The script finds your Solverr app from its own `src`, so it must load from your app's address over `https://`. `http://` works only for `localhost`, `127.0.0.1` and `[::1]`. If a script loader, such as a tag manager, adds the tag for you, add a `data-solverr-embed` attribute to the tag so the script can still find it.
+
+| Attribute | Value | When to use it |
+|---|---|---|
+| `data-solverr-link` | A payment link id, starting with `lnk_` | The same price for everyone. A click opens the payment link page, and each time a customer continues there, a new invoice is created |
+| `data-solverr-invoice` | An invoice id, starting with `inv_` | A price your server calculated, such as a cart total, after you create the invoice with [the API](/docs/api/createInvoice) |
+| `data-solverr-mode` | `overlay` | Optional, to open the checkout in a [popup](#open-the-checkout-in-a-popup) over your page instead of the full checkout page |
+
+Any element with `data-solverr-link` or `data-solverr-invoice` opens the checkout when clicked. The browser goes to `https://your-solverr-host/l/<link id>` for a payment link, or to `https://your-solverr-host/pay/<invoice id>` for an invoice. Ctrl-click (Cmd-click on a Mac) opens the checkout page in a new tab, except on a button with `data-solverr-mode="overlay"`, which always opens the popup.
+
+The amount always comes from the link or the invoice on the server, never from the page, so a customer cannot change the price. Loading the script twice is safe: a second copy on the same page does nothing.
+
+## Open the checkout from your own code
+
+The script also adds `window.Solverr.open`, which goes to the full checkout page:
+
+```js
+window.Solverr.open({ link: "lnk_8Fq2xT4mW9pL3vN7rB2s" });
+// or
+window.Solverr.open({ invoice: "inv_7h3K9dWq2LmN4pRt6vXy" });
+```
+
+If you use a bundler, install the package instead and pass your app's address to `open`:
+
+```bash
+npm install solverr-embed
+```
+
+```js
+import { open } from "solverr-embed";
+
+open({ baseUrl: "https://your-solverr-host", link: "lnk_8Fq2xT4mW9pL3vN7rB2s" });
+```
+
+`baseUrl` must start with `https://`. `http://` is accepted only for `localhost`, `127.0.0.1` and `[::1]`.
+
+## Know when the customer has paid
+
+The customer leaves your page to pay, so your page gets no event. Learn about the payment on your server from the [`invoice.paid` webhook](/docs/webhooks/events) or by calling `GET /api/v1/invoices/:id`.
+
+To bring the customer back to your site after payment, set a return address:
+
+- **Invoices your server creates.** Set `redirect_url` when you [create the invoice](/docs/api/createInvoice). After payment, the checkout shows a **Back to** button with your business name that takes the customer to your `redirect_url`. The checkout never redirects on its own, so the customer can read the receipt first.
+- **Payment links.** Set a return address when you create the link: **After payment, send customers to (optional)** in the dashboard, or `redirect_url` in the API. Without one, the checkout sends the customer to the business website from your profile. With neither, the customer stays on the **Payment complete** screen, which links to the receipt.
+
+<Callout type="warn">
+A visit to your `redirect_url` does not confirm a payment, because anyone can open that address. Confirm the payment on your server before you ship anything.
+</Callout>
+
+## Open the checkout in a popup
+
+To keep the customer on your page, add `data-solverr-mode="overlay"` to the button. The checkout then opens in a popup over your page, and the customer pays without leaving it.
+
+```html
+<button data-solverr-link="lnk_8Fq2xT4mW9pL3vN7rB2s" data-solverr-mode="overlay">Pay with crypto</button>
+```
+
+From your own code, pass `"overlay"` as the second argument of `window.Solverr.open`, or `mode: "overlay"` to the package's `open`:
+
+```js
+window.Solverr.open({ link: "lnk_8Fq2xT4mW9pL3vN7rB2s" }, "overlay");
+```
+
+```js
+import { open, PAID_EVENT } from "solverr-embed";
+
+open({ baseUrl: "https://your-solverr-host", link: "lnk_8Fq2xT4mW9pL3vN7rB2s", mode: "overlay" });
+window.addEventListener(PAID_EVENT, (event) => console.log(event.detail.invoice.id));
+```
+
+### Listen for the paid event
+
+When the checkout in the popup reports a payment, the script fires a `solverr:paid` event on the button that opened it. The event bubbles up to `window`. When your own code opened the popup, the event fires on `window` directly.
+
+```html
+<script>
+  window.addEventListener("solverr:paid", (event) => {
+    console.log("Paid invoice", event.detail.invoice.id);
+    // Show a thank-you message.
+  });
+</script>
+```
+
+`event.detail.invoice` has the fields `id`, `object`, `mode`, `status`, `amount`, `currency`, `order_id` and `receipt_url`. The customer stays on your page, so the popup does not use `redirect_url`.
+
+<Callout type="warn">
+Use the event only to update the page. Anyone can fire a browser event, so never ship goods because of it. Confirm the payment on your server with the [`invoice.paid` webhook](/docs/webhooks/events) or with `GET /api/v1/invoices/:id`.
+</Callout>
+
+### How the popup behaves
+
+- It fills the screen on phones, shows as a centered panel on larger screens, and follows the visitor's light or dark setting.
+- The customer closes it with the close button, the Escape key or the browser's close request (such as the Android back gesture), even while the checkout inside it has focus. When a wallet dialog is open in the checkout, Escape closes that dialog first.
+- Page scrolling pauses and keyboard focus stays in the popup until it closes. Focus then returns to the element that had it when the popup opened, usually the button that opened it.
+- Animations turn off for visitors who ask for reduced motion.
+- The popup passes your page's address to the checkout, and the checkout sends its paid and close messages to that address only.
+- Only messages from the checkout frame on your Solverr app's address are accepted.
+
+## Content Security Policy
+
+If your site sends a strict `Content-Security-Policy`, allow the script from your Solverr app in `script-src`, next to the sources your page already allows. The browser loads `embed.js` from your Solverr app in both modes, so the full checkout page needs this rule too. The popup also adds one `style` element to your page and loads the checkout in a frame, so for the popup allow inline styles and frames from your Solverr app as well:
+
+```text
+script-src 'self' https://your-solverr-host;
+style-src 'self' 'unsafe-inline';
+frame-src https://your-solverr-host;
+```

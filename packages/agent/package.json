@@ -1,0 +1,65 @@
+{
+  "name": "solverr-agent",
+  "version": "0.1.2",
+  "description": "Agent wallet that pays x402 Solverr paywalls from NEAR and Base within spending limits, plus a local stdio MCP server.",
+  "license": "MIT",
+  "homepage": "https://github.com/forcequitx/solverr/tree/main/packages/agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forcequitx/solverr.git",
+    "directory": "packages/agent"
+  },
+  "bugs": {
+    "url": "https://github.com/forcequitx/solverr/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "solverr-agent": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.22.2"
+  },
+  "keywords": [
+    "x402",
+    "solverr",
+    "near-intents",
+    "ai-agents",
+    "mcp",
+    "payments"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "solverr-x402": "0.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "near-api-js": "7.4.0",
+    "undici": "8.12.4",
+    "viem": "2.57.16",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3",
+    "vite": "8.3.7",
+    "vitest": "5.1.0"
+  }
+}

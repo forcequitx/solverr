@@ -1,0 +1,180 @@
+---
+title: Overview
+icon: globe
+description: "The Solverr REST API basics: base URL, API key authentication, public checkout endpoints, errors, idempotency, pagination and rate limits."
+---
+
+The Solverr REST API creates invoices, payment links, refunds, payouts, subscriptions and credits. Your server calls it with an API key, and checkouts and paying agents call its public endpoints without one.
+
+## Base URL
+
+The base URL is the address of your Solverr app followed by `/api/v1`. In these docs, `your-solverr-host` stands for that address. Replace it with yours, such as `pay.example.com`.
+
+```text
+https://your-solverr-host/api/v1
+```
+
+Every endpoint lives under this base URL. Requests and responses are JSON, and amounts are decimal strings such as `"25.00"`.
+
+## Authentication
+
+Business endpoints need your API key as a bearer token:
+
+```bash
+curl https://your-solverr-host/api/v1/invoices \
+  -H "Authorization: Bearer sk_live_…"
+```
+
+API keys start with `sk_live_`. The owner of the business creates them in **Dashboard → Developers** after verifying the payout wallet. Every request with an API key works on real payments, so keep the key on your server.
+
+Each key is shown only once; Solverr stores only a hash and the last 4 characters. You can revoke a key in **Dashboard → Developers**, after which it returns `401` at once.
+
+### Public checkout endpoints
+
+The endpoints the checkout page uses take no key, need only an invoice id and never return anything private to you, so agents and custom checkouts can call them too. They allow cross-origin requests from any site (no cookies are sent), so a custom checkout can call them from the customer's browser.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/v1/invoices/:id/quote` | Get a deposit address and the exact amount for a coin |
+| `POST /api/v1/invoices/:id/deposit` | Report the transaction hash after sending, or `wallet_sent: true` when the wallet returned none |
+| `POST /api/v1/invoices/:id/estimate` | Compare the cost in up to 5 coins |
+| `GET /api/v1/invoices/:id/status` | Read the live payment status |
+| `GET /api/v1/invoices/:id/events` | Live updates as a Server-Sent Events stream that says when to read status again |
+| `POST /api/v1/invoices/:id/simulate` | Demo store invoices only: simulate an outcome without real money (no cross-origin access) |
+| `POST /api/v1/invoices/:id/email` | Ask for a receipt email |
+| `POST /api/v1/payment-links/:id/invoices` | Start a payment from a link |
+| `GET /api/v1/support-cases/lookup`, `POST /api/v1/support-cases` | Help page |
+| `GET /api/v1/tokens` | Supported coins with USD prices |
+| `GET /api/v1/route-limits` | Current NEAR Intents minimums and unavailable routes, measured every 30 minutes |
+
+## Endpoints
+
+Each endpoint page shows its parameters, an example request and the possible responses, and can send a request from your browser.
+
+<Cards>
+  <Card title="Invoices" icon="payments" href="/docs/api/createInvoice" description="Create, read, list and redeem invoices." />
+  <Card title="Payment links" icon="links" href="/docs/api/createPaymentLink" description="Reusable links with a fixed price, or tip links." />
+  <Card title="Refunds" icon="undo" href="/docs/api/createRefund" description="Refund a paid invoice from your own wallet." />
+  <Card title="Payouts" icon="send" href="/docs/api/createPayout" description="Send money to any address, one at a time or in a batch." />
+  <Card title="Subscriptions" icon="subscriptions" href="/docs/api/createSubscription" description="A new invoice every week or month." />
+  <Card title="Credits" icon="coins" href="/docs/api/topUpCredits" description="Prepaid balances that AI agents spend per call." />
+  <Card title="Webhooks" icon="webhook" href="/docs/api/sendTestWebhook" description="Send a ping event to your webhook URL." />
+  <Card title="Checkout" icon="wallet" href="/docs/api/createQuote" description="Public endpoints the checkout page and paying agents call." />
+</Cards>
+
+## Errors
+
+Every error has the same shape:
+
+```json
+{
+  "error": {
+    "type": "invalid_request",
+    "message": "amount must be a decimal string with up to 2 decimals, such as \"25.00\".",
+    "param": "amount"
+  }
+}
+```
+
+`param` is present when one field or header caused the error. `message` is a sentence you can log or show.
+
+Checkout endpoints add a `code` to the `invalid_state` errors for a paid invoice, an expired invoice and a payment in progress: `invoice_paid`, `invoice_expired` or `payment_in_progress`. An invoice created before the business moved its payout wallet to another network can no longer be paid with any coin, and its errors carry `payout_changed`; ask the business for a new invoice. A `429` for an invoice that reached its 10 new payment addresses in an hour carries `too_many_attempts`, and its `Retry-After` can be up to an hour. A `429` for a payment that already has 5 support cases from the last 24 hours also carries `too_many_attempts`, with a `Retry-After` of up to a day. Use the code when you show your own text instead of `message`.
+
+| Status | `type` | Meaning |
+|---|---|---|
+| 400 | `invalid_request` | A field is missing or wrong, the body is not JSON, or the body is larger than 64 KB |
+| 401 | `authentication_failed` | The key is missing, malformed or revoked |
+| 404 | `not_found` | No object with this id in your account |
+| 409 | `invalid_state` | The object cannot do this now, for example refunding an unpaid invoice |
+| 409 | `already_redeemed` | This paid invoice was already redeemed |
+| 409 | `insufficient_credit` | The credit balance is too low |
+| 409 | `idempotency_conflict` | The `Idempotency-Key` was used with a different request, or its first request is still running |
+| 422 | `quote_unavailable` | The payment network cannot use this coin or transaction right now |
+| 429 | `rate_limited` | Too many requests, so wait the seconds in `Retry-After` |
+| 502 | `upstream_unavailable` | The payment network or the currency rate service did not respond |
+| 503 | `upstream_unavailable` | Live updates from the `events` stream are not available right now, so read `status` on an interval instead |
+| 500 | `internal_error` | Something unexpected went wrong |
+
+Request bodies are strict: an unknown field returns `400`. The POST endpoints that take no body (redeem an invoice, cancel a refund or payout, refund a credit charge and `POST /api/v1/webhooks/test`) ignore the fields of a body you send, but the body must still be valid JSON. A wrong HTTP method on an existing path is the one exception to the error shape: it returns `405` without a body.
+
+## Idempotency
+
+To retry a POST safely after a network error, send an `Idempotency-Key` header with a unique string of 1 to 255 characters for that operation, such as `invoice-order-1042`.
+
+```bash
+curl https://your-solverr-host/api/v1/invoices \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: invoice-order-1042" \
+  -d '{"amount":"25.00","currency":"USD","order_id":"1042"}'
+```
+
+- The same key on the same endpoint with the same body returns the stored response with the header `Idempotent-Replayed: true`, and no second invoice is created.
+- The same key with a different body, or on another endpoint, returns `409 idempotency_conflict`.
+- While the first request with a key is still running, the same key returns `409 idempotency_conflict` with `Retry-After: 1`. The request never runs twice; wait a moment and retry.
+- Only successful responses are stored. When a request ends with an error, the key is released and you can retry with it.
+- Keys belong to your business across every endpoint, are shared by all your API keys and are kept for 24 hours. Give each operation its own key, for example `invoice-order-1042` for the invoice of order 1042 and `refund-order-1042` for its refund, not the order id alone.
+
+These endpoints read the header: create an invoice, payment link, refund, payout, payout batch or subscription; redeem an invoice; cancel a refund or payout; the three credits endpoints (top up, charge and refund a charge); and `POST /api/v1/webhooks/test`.
+
+## Pagination
+
+List endpoints return the newest objects first:
+
+```json
+{ "object": "list", "data": [], "has_more": true }
+```
+
+| Query parameter | Meaning |
+|---|---|
+| `limit` | Items per page, from 1 to 100, with a default of 20 |
+| `starting_after` | The id of the last item you already have; the page starts after it |
+| `status` | Invoices only, to return one status such as `paid` |
+
+To read every page, repeat the call with `starting_after` set to the last id of the previous page, until `has_more` is `false`.
+
+```bash
+curl "https://your-solverr-host/api/v1/invoices?limit=50&starting_after=inv_7h3K9dWq2LmN4pRt6vXy" \
+  -H "Authorization: Bearer sk_live_…"
+```
+
+## Rate limits
+
+Most limits count requests in fixed 60-second windows; the table names the other window lengths. Over a limit, the API returns `429 rate_limited` with a `Retry-After` header that gives the seconds until the window resets. Wait that long before you try again.
+
+| What | Limit |
+|---|---|
+| Business endpoints, per API key, shared: list invoices; create or list payment links, refunds, payouts and subscriptions; get or cancel a refund or payout; turn off a payment link; cancel a subscription; top up credits | 60 per minute |
+| `POST /api/v1/payouts/batch`, per API key | 20 per minute |
+| `POST /api/v1/invoices` (create), per API key | 1200 per minute |
+| `GET /api/v1/invoices/:id`, per API key | 1200 per minute |
+| `POST /api/v1/invoices/:id/redeem`, per API key | 1200 per minute |
+| `POST /api/v1/credits/charge`, and separately `POST /api/v1/credits/charges/:id/refund`, per API key | 600 per minute each |
+| `POST /api/v1/webhooks/test`, per business (shared with the dashboard's **Send ping event**) | 10 per minute |
+| Remote MCP server, per API key | 120 per minute |
+| `quote`, per IP address, per network and per invoice | 120, 120 and 10 per minute |
+| `quote`, new payment addresses per business | 120 per minute |
+| `quote`, new payment addresses per invoice | 10 per hour |
+| `status`, per IP address and per network | 600 and 1200 per minute |
+| `events` stream starts, per IP address, per network and per invoice | 30, 100 and 20 per 4 minutes |
+| `deposit`, per IP address, per network and per invoice | 20, 80 and 5 per minute |
+| `simulate` (test mode), per IP address | 60 per minute |
+| `estimate`, per invoice | 10 per minute |
+| `estimate`, per IP address and per network: each request counts the number of different coins it compares | 25 and 100 coins per minute |
+| `email`, per IP address | 5 per minute |
+| Payment link invoices, per IP address, per network and per link | 60, 240 and 600 per minute |
+| Support case lookup, per IP address | 30 per minute |
+| Support case creation, per IP address and per network | 5 and 20 per minute |
+| Support cases per invoice, counting the ones Solverr opens when a swap fails | 5 per 24 hours |
+| `tokens`, per IP address | 120 per minute |
+| `route-limits`, per IP address | 60 per minute |
+| Logos (`GET /api/v1/logos/:id`), per IP address | 300 per minute |
+
+A network is an IPv4 address or an IPv6 /48; a single IP address is an IPv4 address or an IPv6 /64.
+
+## Invoice amounts and lifetime
+
+- `amount` is a decimal string with up to 2 decimals, and `currency` is `USD`, `EUR` or `INR`.
+- The settlement amount is fixed when the invoice is created. EUR and INR are converted to USD at the ECB reference rates, which the ECB publishes once per working day and Solverr reads again every hour. USDC, USDT and DAI count as 1 USD; other coins use their current USD price.
+- An invoice lives 60 minutes by default. Set `expires_in` from 900 seconds (15 minutes) to 86400 seconds (24 hours).
+- `metadata` takes up to 20 keys of your own, with keys up to 40 characters and values up to 500.

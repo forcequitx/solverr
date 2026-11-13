@@ -1,0 +1,72 @@
+---
+title: MCP servers
+icon: terminal
+description: "Solverr's two MCP servers: the remote server that manages your business account from a code editor, and the local agent server that pays 402 paywalls."
+---
+
+Solverr has two MCP servers. The remote server runs on your Solverr app and acts as your business account from your code editor. The local agent server runs beside an AI agent and pays for its API calls within the limits you set.
+
+## Which server to use
+
+| Server | Who uses it | What it does |
+|---|---|---|
+| Remote MCP at `/api/mcp` | You, from your code editor | Acts as your business account: invoices, links, refunds, integration code |
+| Local agent MCP (`npx solverr-agent mcp`) | An AI agent that buys things | Pays 402 paywalls within spending limits |
+
+## Remote MCP server for developers
+
+The remote server runs at `https://your-solverr-host/api/mcp` and uses the Streamable HTTP transport, with your API key as the bearer token.
+
+### Add it to your editor
+
+To add the server to Claude Code, run this command with your API key:
+
+```bash
+claude mcp add --transport http solverr https://your-solverr-host/api/mcp \
+  --header "Authorization: Bearer sk_live_…"
+```
+
+**Dashboard → Developers** shows this command with your app's address filled in. In Cursor or another MCP client, add the same URL with the same `Authorization` header.
+
+Once the server is added, ask your editor in plain words, for example "Add crypto checkout to this site with Solverr."
+
+<Callout type="warn">
+The MCP server acts with the full rights of the key, so the invoices, links and refunds it creates are real. Keep the key private and check what your editor asks the server to do.
+</Callout>
+
+### Tools
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `create_invoice` | `amount`, `currency`, optional `description`, `order_id`, `redirect_url`, `customer_email`, `metadata` and `expires_in` | Creates an invoice and returns it with its `checkout_url` |
+| `get_invoice` | `id` | Returns one invoice and its status |
+| `list_payments` | Optional `limit` (1 to 50, default 10) and `status` | Lists recent invoices, newest first |
+| `create_payment_link` | `title`, `currency`, optional `amount` and `redirect_url` | Creates a payment link, or a tip link when `amount` is left out |
+| `get_integration_snippet` | `kind`: `html`, `react`, `node` or `webhook`, optional `link_id` | Returns ready-to-paste code, using your newest active link when `link_id` is left out |
+| `create_refund` | `invoice_id`, and optionally `amount` and `payment_id` | Creates a pending refund that you approve from your wallet at the returned `sign_url`: the whole remaining amount, or `amount` in the coin you receive. `payment_id` refunds an extra payment instead of the one that paid the invoice |
+
+For `create_invoice` and `create_payment_link`, `amount` has up to 2 decimals and `currency` is `USD`, `EUR` or `INR`. For `create_refund`, `amount` is in the coin you receive, with no more decimals than that coin has. The optional invoice fields follow [Create an invoice](/docs/api/createInvoice), so `expires_in`, for example, is the lifetime in seconds, from 900 to 86400.
+
+### Limits and errors
+
+Each API key can send 120 JSON-RPC messages per minute to the MCP server, and each message in a batch counts on its own. This limit belongs to the MCP server and is separate from the REST API limits; the create tools count against it instead of the API's create limits.
+
+The create tools take no idempotency key, so repeating `create_invoice` or `create_payment_link` creates a second invoice or link. If you did not get the answer to a call, check `list_payments` for invoices, or **Dashboard → Payment links** for links, before you repeat it.
+
+When a tool fails, its result has `isError: true` and its text is `{ "error": { "type": …, "message": … } }`, with the REST API's values but without `param` or `code`. For example, `get_integration_snippet` with `kind` `html` or `react` returns `not_found` with "No active payment link. Create one with create_payment_link first." when your business has no active payment link.
+
+A missing or wrong key returns `401` with a `WWW-Authenticate: Bearer` header and the usual [error body](/docs/api#errors).
+
+## Local MCP server for paying agents
+
+The agent kit runs as a local MCP server over stdio and gives an AI client the tools `pay_url`, `get_balances`, `get_spending` and `set_limits`. It never spends past the limits you start it with. Pass them as environment variables, together with a wallet key and your trusted gateways:
+
+```bash
+claude mcp add solverr-agent \
+  -e AGENT_BASE_KEY=0x… \
+  -e AGENT_LIMIT_PER_PAYMENT_USD=1 -e AGENT_LIMIT_DAILY_USD=5 -e AGENT_ALLOW_HOSTS=api.example.com \
+  -e AGENT_TRUSTED_GATEWAYS=https://pay.example.com \
+  -- npx solverr-agent mcp
+```
+
+The [Agent kit](/docs/agents/agent-kit#run-it-as-a-local-mcp-server) page lists every environment variable and tool.

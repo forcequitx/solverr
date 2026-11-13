@@ -1,0 +1,72 @@
+---
+title: Subscriptions
+icon: subscriptions
+description: Bill a customer weekly or monthly. Solverr creates and emails a new invoice each period, and the customer pays it on the normal checkout page.
+---
+
+A subscription is a recurring bill: Solverr creates a new invoice for the customer every week or month. Crypto wallets cannot be charged automatically, so the customer pays each invoice on the normal checkout page.
+
+## Create a subscription
+
+In **Dashboard → Subscriptions**, enter the customer's email, the amount, the currency, the interval and an optional description, then select **Create subscription**.
+
+To create one with the API, send `POST /api/v1/subscriptions`:
+
+```bash
+curl https://your-solverr-host/api/v1/subscriptions \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_email": "ada@example.com",
+    "amount": "9.00",
+    "currency": "USD",
+    "interval": "month",
+    "description": "Pro plan"
+  }'
+```
+
+```json
+{
+  "id": "sub_2mQ8vT4kW9xL3pN7rB5s",
+  "object": "subscription",
+  "status": "active",
+  "customer_email": "ada@example.com",
+  "amount": "9.00",
+  "currency": "USD",
+  "interval": "month",
+  "description": "Pro plan",
+  "next_invoice_at": "2026-11-05T12:00:00.000Z",
+  "created_at": "2026-11-05T12:00:00.000Z"
+}
+```
+
+`GET /api/v1/subscriptions` lists your subscriptions, newest first.
+
+### Limits
+
+Each subscription sends email, so a business can create at most 500 subscriptions in 24 hours and keep at most 2,000 active. Until its first payment, a new business can create at most 10 subscriptions in 24 hours. Past either limit, the API answers `409 invalid_state`. Cancel subscriptions you no longer need.
+
+### Fields
+
+| Field | Rules |
+|---|---|
+| `customer_email` | Required, a valid email address |
+| `amount` | Required, a decimal string with up to 2 decimals |
+| `currency` | Required, `USD`, `EUR` or `INR` |
+| `interval` | Required, `week` or `month` |
+| `description` | Optional, up to 200 characters. Without it, invoices say "Weekly subscription" or "Monthly subscription" |
+
+## What happens each period
+
+1. The worker checks subscriptions every minute, so the first invoice is created within about a minute.
+2. Each invoice stays payable for 24 hours. You get a `subscription.invoice_created` webhook with the invoice.
+3. When email is configured, the customer gets an email with the payment link. Otherwise, send them the invoice's `checkout_url` yourself. One email address gets at most 10 payment-link emails in 24 hours across all businesses. Past that, the email is skipped and you send the `checkout_url` yourself.
+4. The next invoice is due one week later, or on the same day of the next month. When the next month is shorter, for example after a subscription created on January 31, the invoice is due on that month's last day, and later months return to the original day.
+
+Each invoice works like any other: you get `invoice.paid` when it is paid, or `invoice.expired` when the customer did not pay within 24 hours. A missed invoice does not stop the subscription.
+
+## Cancel a subscription
+
+In **Dashboard → Subscriptions**, select **Cancel** next to the subscription. Its status becomes `canceled` and no more invoices are created. Invoices already sent stay payable until they expire.
+
+With the API, `DELETE /api/v1/subscriptions/:id` cancels a subscription and returns it with `"status": "canceled"`.

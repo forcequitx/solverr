@@ -1,0 +1,307 @@
+---
+title: Paywall middleware
+icon: lock
+description: Charge AI agents per request on a Next.js or Express route with solverr-x402, accept standard x402 USDC payments, and run the paywall on several instances.
+---
+
+`solverr-x402` puts a price on an API route. An unpaid request gets a `402` answer with a Solverr invoice, and a paid request reaches your handler. The paywall can also offer the standard x402 `exact` scheme for USDC on Base or another EVM network, so agents with a standard x402 client can pay you too.
+
+## Install
+
+```bash
+npm install solverr-x402
+```
+
+The package has one runtime dependency, `@x402/core`, and needs Node 22.12 or later. `paywall(...)` uses only Web-standard APIs, so it also runs on Bun, Deno and edge runtimes. `paywallExpress(...)` needs Node.
+
+## Protect a Next.js route
+
+```ts
+// app/api/premium/route.ts
+import { paywall } from "solverr-x402";
+
+export const GET = paywall(
+  {
+    price: "0.05",
+    currency: "USD",
+    apiKey: process.env.SOLVERR_SECRET_KEY!,
+    baseUrl: process.env.SOLVERR_URL!, // https://your-solverr-host
+    description: "Premium market data",
+  },
+  async () => Response.json({ data: "premium" }),
+);
+```
+
+## Protect an Express route
+
+```ts
+import express from "express";
+import { paywallExpress } from "solverr-x402";
+
+const app = express();
+
+app.get(
+  "/premium",
+  paywallExpress({
+    price: "0.05",
+    currency: "USD",
+    apiKey: process.env.SOLVERR_SECRET_KEY!,
+    baseUrl: process.env.SOLVERR_URL!,
+  }),
+  (req, res) => res.json({ data: "premium" }),
+);
+```
+
+## Options
+
+| Option | Required | Meaning |
+|---|---|---|
+| `price` | yes | Decimal string with up to 2 decimals, for example `"0.05"` |
+| `currency` | yes | `USD`, `EUR` or `INR` |
+| `apiKey` | yes | Your API key, `sk_live_…` |
+| `baseUrl` | yes | The address of your Solverr app; https, or http only for `localhost`, `127.0.0.1` or `[::1]` |
+| `description` | no | Shown on the invoice and the credit charge, defaulting to "Access to" plus the method and path on the invoice, and to the method and path alone on the credit charge |
+| `credits` | no | `true` to also accept [credit tokens](/docs/agents/credits), only with `currency: "USD"` |
+| `expiresIn` | no | Invoice lifetime in seconds, from 900 to 86400 (default 900) |
+| `timeoutMs` | no | Timeout of each attempt of a Solverr API call (default 10 seconds). Network errors, timeouts, a success answer that is not JSON, 429, 5xx and a 409 for an Idempotency-Key still in progress are retried up to twice; other errors fail at once, and so does a `Retry-After` longer than 5 seconds |
+| `exact` | no | Also accept [standard x402 `exact` payments](#accept-standard-x402-payments-in-usdc) in USDC (Base by default), only with `currency: "USD"` |
+| `discovery` | no | [Bazaar discovery](#list-the-route-in-a-bazaar) metadata sent in every `402` |
+| `challengeLimit` | no | `{ key, perMinute }`: at most `perMinute` payment challenges per client, where `key(request)` names the client (see below) |
+| `claimStore` | no | Where payment claims are kept, in memory by default. On serverless hosts or with several processes, pass one [shared store](#run-on-several-instances-or-serverless) |
+
+The paywall checks its options when it is created and throws on a wrong one, for example `credits` or `exact` with a price in EUR or INR.
+
+Every `402` creates a Solverr invoice, and one API key can create 1200 invoices a minute. Without a limit, anonymous visitors who never pay can use them all up, and every visitor then gets `503` until the minute ends. Set `challengeLimit` to give one client at most `perMinute` challenges a minute. After that, the client gets `429` with `Retry-After`, and no invoice is created. A rejected payment or credit token counts as a challenge too. A client over the limit is refused before the paywall calls Solverr, so made-up payment headers cannot use up your key's limits either. A client that pays waits at most until the minute ends, and its invoice stays valid. From `key`, return the client's IP, or `undefined` to leave a request unlimited:
+
+```ts
+challengeLimit: { key: (request) => request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim(), perMinute: 10 },
+```
+
+This example reads the last `X-Forwarded-For` entry, the one your own proxy adds, and works behind one proxy. The first entry comes from the client when the proxy appends to the header, so a client could change it on every request and never reach the limit. Behind several proxies, or when your proxy sets its own client IP header, read the address your outermost proxy wrote instead.
+
+## What the agent receives
+
+The `402` answer carries a `PAYMENT-REQUIRED` header: a base64-encoded JSON object with one entry in `accepts`, like this one:
+
+```json
+{
+  "scheme": "solverr",
+  "network": "eip155:8453",
+  "amount": "50000",
+  "asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+  "payTo": "inv_7h3K9dWq2LmN4pRt6vXy",
+  "maxTimeoutSeconds": 899,
+  "extra": {
+    "invoice_id": "inv_7h3K9dWq2LmN4pRt6vXy",
+    "mode": "live",
+    "checkout_url": "https://your-solverr-host/pay/inv_7h3K9dWq2LmN4pRt6vXy",
+    "quote_url": "https://your-solverr-host/api/v1/invoices/inv_7h3K9dWq2LmN4pRt6vXy/quote",
+    "deposit_url": "https://your-solverr-host/api/v1/invoices/inv_7h3K9dWq2LmN4pRt6vXy/deposit",
+    "status_url": "https://your-solverr-host/api/v1/invoices/inv_7h3K9dWq2LmN4pRt6vXy/status",
+    "price": "0.05",
+    "currency": "USD",
+    "settlement": { "asset_id": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", "symbol": "USDC", "blockchain": "base", "amount": "0.05" },
+    "expires_at": "2026-11-05T12:15:00.000Z",
+    "credits": false
+  }
+}
+```
+
+- `network`, `asset` and `amount` describe what you receive: the CAIP-2 network, the NEAR Intents asset id and the amount in base units. A chain without a CAIP-2 id gets `solverr:<code>`, where `<code>` is its NEAR Intents blockchain code.
+- `payTo` is the invoice id. The agent gets a one-time deposit address for the coin it chooses from `quote_url`.
+- After paying, the agent sends a `PAYMENT-SIGNATURE` header with a base64-encoded object that holds `x402Version` 2, `accepted` (the entry above) and a `payload` with `invoice_id`.
+
+## Responses
+
+| Situation | Status | Headers |
+|---|---|---|
+| No payment | 402 | `PAYMENT-REQUIRED` |
+| Invoice unpaid, already used, for another path, or for another price | 402 | `PAYMENT-RESPONSE` with `success: false` and `errorReason`, plus a new `PAYMENT-REQUIRED` |
+| `PAYMENT-SIGNATURE` that is not base64 JSON, or has no valid `payload.invoice_id` | 400 | |
+| `PAYMENT-SIGNATURE` with another x402 version or scheme | 402 | `PAYMENT-RESPONSE` with `success: false` and `errorReason`, plus a new `PAYMENT-REQUIRED` |
+| Paid | Your handler's status | `PAYMENT-RESPONSE` with `success: true`, `transaction`, `network`, `amount` and `payer`, described below |
+| Credit token charged | Your handler's status | `Solverr-Credit-Balance` when your handler answers below 400; otherwise the charge is refunded |
+| Solverr unreachable, an answer that is not JSON, or a `claimStore` that fails to claim | 503 | `Retry-After: 5`. The reason goes to your server log through `console.error` |
+| Solverr rejected your API key, refused to create the invoice (for example because the coin you receive is not supported), or `baseUrl` answers with a redirect | 500 | When the invoice cannot be created, Solverr's reason goes to your server log through `console.error`; a redirect names the address it points to. A key rejected later, while reading or redeeming the invoice or charging credits, is not logged |
+
+For a paid `solverr` invoice, `PAYMENT-RESPONSE` holds:
+
+- `transaction`: the transaction that delivered the payment to your wallet, or `""` for a private payment or when no delivery is recorded.
+- `network`: the CAIP-2 network you receive on.
+- `amount`: what you receive, in base units.
+- `payer`: the payer's refund address. It is left out when Solverr returns no payment for the invoice.
+
+If you redeem invoices without the middleware, call [`POST /api/v1/invoices/:id/redeem`](/docs/api/redeemInvoice) instead.
+
+## Accept standard x402 payments in USDC
+
+With the `exact` option, the `402` lists the standard x402 `exact` scheme for native USDC as a second payment option next to `solverr`, on Base mainnet unless you choose another network. Standard x402 clients, such as `@x402/fetch` or `@x402/axios` with `@x402/evm`, skip the `solverr` entry they do not know and pay this one.
+
+An `exact` payment does not go through Solverr: the agent signs a USDC transfer to your address, and an x402 facilitator checks and sends it. The `402` still creates a Solverr invoice for the `solverr` option, so when the agent pays with `exact`, that invoice stays unpaid until it expires. The `exact` payment does not appear in your Solverr dashboard and sends no Solverr webhook.
+
+The `exact` option takes these fields:
+
+| `exact` field | Required | Meaning |
+|---|---|---|
+| `payTo` | yes | Your EVM address that receives the USDC on `network` |
+| `facilitatorUrl` | yes | An x402 facilitator that supports `exact` on `network` |
+| `network` | no | Where the USDC is paid: `"eip155:8453"` (Base mainnet, the default), `"eip155:1"` (Ethereum), `"eip155:42161"` (Arbitrum One), `"eip155:137"` (Polygon) or `"eip155:43114"` (Avalanche C-Chain) |
+| `createAuthHeaders` | no | The facilitator's authentication headers, in the format `@x402/core` uses |
+| `timeoutMs` | no | Timeout of each facilitator call (default 30 seconds) |
+
+### Choose a facilitator
+
+<Callout type="warn">
+The public facilitator at `https://x402.org/facilitator` serves only test networks such as Base Sepolia. The `exact` option offers mainnet networks only, so do not use that facilitator here.
+</Callout>
+
+Use a facilitator that supports `exact` on the network you choose. For Base mainnet, one is the Coinbase CDP facilitator at `https://api.cdp.coinbase.com/platform/v2/x402`, which needs a CDP API key. The [x402 facilitator list](https://docs.x402.org/dev-tools/facilitators) names others, and you can host your own. Check each facilitator's terms and authentication before you use it.
+
+### Example with the CDP facilitator
+
+```ts
+// app/api/premium/route.ts
+import { paywall } from "solverr-x402";
+import { createFacilitatorConfig } from "@coinbase/x402";
+
+const cdp = createFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
+
+export const GET = paywall(
+  {
+    price: "0.05",
+    currency: "USD",
+    apiKey: process.env.SOLVERR_SECRET_KEY!,
+    baseUrl: process.env.SOLVERR_URL!,
+    exact: {
+      payTo: "0xYourBaseAddress",
+      facilitatorUrl: cdp.url!,
+      createAuthHeaders: cdp.createAuthHeaders,
+    },
+  },
+  async () => Response.json({ data: "premium" }),
+);
+```
+
+`paywallExpress` takes the same options, including `exact`.
+
+### The `exact` entry the agent receives
+
+```json
+{
+  "scheme": "exact",
+  "network": "eip155:8453",
+  "amount": "50000",
+  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "payTo": "0xYourBaseAddress",
+  "maxTimeoutSeconds": 300,
+  "extra": { "name": "USD Coin", "version": "2" }
+}
+```
+
+- `amount` is the price in USDC base units. USDC has 6 decimals, so `"0.05"` becomes `"50000"`.
+- `extra.name` and `extra.version` describe USDC on the chosen network for the signature. The agent signs an EIP-3009 `transferWithAuthorization` for exactly `amount` to `payTo`.
+
+### How an `exact` payment is checked
+
+1. The agent sends `PAYMENT-SIGNATURE` with the signed transfer. The paywall checks that its `accepted` entry matches the current price, asset and `payTo`.
+2. The facilitator verifies the signature. If it is not valid, the agent gets a new `402` and your handler does not run.
+3. Once the signature is verified, your handler runs.
+4. The facilitator settles the transfer only if your handler answered with a status below 400. The USDC then moves to your address.
+
+| Situation | Status | Headers |
+|---|---|---|
+| `accepted` differs from the current price, asset or `payTo` | 402 | `PAYMENT-RESPONSE` with `invalid_payment_requirements`, plus a new `PAYMENT-REQUIRED` |
+| Facilitator says the payment is invalid | 402 | `PAYMENT-RESPONSE` with the facilitator's reason, plus a new `PAYMENT-REQUIRED` |
+| The same payment is already paying for another request, or was already settled | 402 | `PAYMENT-RESPONSE` with `invalid_transaction_state`, plus a new `PAYMENT-REQUIRED`, and your handler does not run |
+| Facilitator unreachable during verify, after 2 retries | 503 | `Retry-After: 5`. The reason goes to your server log through `console.error` |
+| Your handler answers 400 or higher | Your handler's status | Nothing is settled and the agent pays nothing |
+| Settlement fails or times out | 402 | `PAYMENT-RESPONSE` with `errorReason`, plus a new `PAYMENT-REQUIRED`, and your handler's response is discarded |
+| Settled | Your handler's status | `PAYMENT-RESPONSE` with `success: true`, `transaction`, `network`, and `payer` and `amount` when the facilitator returns them |
+
+## List the route in a Bazaar
+
+The x402 [Bazaar extension](https://docs.x402.org/extensions/bazaar) lets agents find paid routes. With the `discovery` option, every `402` carries your route's description as `extensions.bazaar`, in two parts:
+
+- `info.input` says how to call the route, for example `{ "type": "http", "method": "GET", "queryParams": { "city": "Paris" } }`, and `info.output` can show an example answer.
+- `schema` is the JSON Schema (draft 2020-12) that `info` must match. A facilitator checks `info` against it before it lists the route.
+
+A route is listed only when an agent sends the extension back with its payment and a facilitator that runs a Bazaar processes that payment. `solverr` payments never reach a facilitator, so in practice a listing comes from an `exact` payment. The [package README](https://www.npmjs.com/package/solverr-x402) has a full example.
+
+## Run on several instances or serverless
+
+Before your handler runs, the paywall claims the payment, so a copy of the same payment sent at the same time gets a `402` instead of running your handler again. Claims are kept in memory by default, which is enough for one long-running server.
+
+On Vercel and other serverless hosts, in a Node cluster, or with several containers, each instance has its own memory. If an agent sends one payment to several instances at once, your handler runs on each of them. You are paid only once, but your handler's work, such as database writes, emails or calls to paid APIs, happens more than once.
+
+To prevent this, give every instance the same `claimStore`. The package includes one for Redis or Valkey and one for Postgres. Neither adds a dependency, because you pass in the client you already use. Both work with a server you run yourself or a hosted free tier.
+
+### Use Redis or Valkey
+
+Pass `RedisClaimStore` a function that sends one command through your Redis client:
+
+```ts
+// app/api/premium/route.ts
+import { createClient } from "redis";
+import { paywall, RedisClaimStore } from "solverr-x402";
+
+const redis = await createClient({ url: process.env.REDIS_URL }).connect();
+const claimStore = new RedisClaimStore((args) => redis.sendCommand(args));
+
+export const GET = paywall(
+  {
+    price: "0.05",
+    currency: "USD",
+    apiKey: process.env.SOLVERR_SECRET_KEY!,
+    baseUrl: process.env.SOLVERR_URL!,
+    claimStore,
+  },
+  async () => Response.json({ data: "premium" }),
+);
+```
+
+With ioredis, pass `([name, ...args]) => redis.call(name, ...args)` instead. The store renews and releases claims with short Lua scripts, so your Redis user must be allowed to run `EVAL`. Scripting is on by default, but ACL rules and hosted plans can turn it off.
+
+### Use Postgres
+
+First, create the table that holds the claims:
+
+```sql
+CREATE TABLE x402_payment_claims (
+  claim_key text PRIMARY KEY,
+  owner text NOT NULL,
+  expires_at timestamptz NOT NULL
+);
+```
+
+Then pass `PostgresClaimStore` a client with a `query(text, params)` method that returns `{ rows }`, such as a `pg` pool:
+
+```ts
+import pg from "pg";
+import { PostgresClaimStore } from "solverr-x402";
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const claimStore = new PostgresClaimStore(pool);
+```
+
+The store deletes expired rows on every 100th claim, and you can also call `claimStore.prune()` from a scheduled job. To use another table name, pass `{ table: "billing.x402_claims" }` as the second argument.
+
+### How the shared store behaves
+
+- Create one store per process and use it for all your routes. A claim names the payment, not the route.
+- A claim lasts 5 minutes. After a payment is redeemed or settled, its claim is held 5 more minutes, so a copy that arrived just before cannot run your handler.
+- Each claim gets a random owner token, and only that token can renew or release it. If your handler runs longer than 5 minutes and another copy of the payment takes the expired claim, the older request can no longer free or extend it.
+- If the store cannot be reached when the paywall claims a payment, the agent gets a `503` with `Retry-After: 5`, your handler does not run, and the error goes to your server log.
+- If the store fails when the paywall releases or renews a claim, the error goes to your server log and the claim ends on its own after 5 minutes.
+- For another backend, implement the `ClaimStore` interface. `claim(key, ttlMs)` returns a new owner token to only one caller while the key is held and `null` to everyone else. `renew(key, owner, ttlMs)` and `release(key, owner)` act only for that owner; `renew` also takes a key nobody holds.
+
+## Rules and limits
+
+- **One invoice, one request, and only for a response that worked.** The paywall checks that the invoice is paid and unused before your handler runs, but redeems it only after your handler answers below 400. If your handler throws or answers 400 or higher, the invoice stays unused and the agent can try again with it. A copy of the same payment sent at the same time gets a `402`: on one server by default, and on every instance with a [shared `claimStore`](#run-on-several-instances-or-serverless).
+- **Credits are given back on failure.** Credits are charged before your handler runs, so an empty balance never reaches it. If your handler throws or answers 400 or higher, the paywall refunds the charge. If the refund still fails after its retries, the paywall logs the charge id with `console.error`; refund it with `POST /api/v1/credits/charges/{id}/refund`.
+- **`exact` settles after your handler.** If settlement fails, the agent gets a `402` instead of your response, even though your handler already ran. In Express, the paywall holds back what your handler writes until settlement finishes.
+- **One `exact` payment, one handler run.** The paywall claims each verified payment, by payer and nonce, until it is settled, so copies of it sent at the same time get a `402`. If your handler fails or settlement fails before anything is sent, the claim is released and the agent can send the same payment again. Claims are kept in memory by default and cover one server process. With several processes, a copy that reaches another process can still run your handler, although only one copy can settle. A [shared `claimStore`](#run-on-several-instances-or-serverless) closes that gap.
+- **A settlement timeout is uncertain.** The transfer may still complete on-chain, but the agent gets a `402` with `unexpected_settle_error`.
+- **Paths are matched exactly.** An invoice created for `GET /premium` cannot pay for `GET /other` or `POST /premium`. Query strings are ignored.
+- **Every unpaid request creates an invoice.** Each one counts toward your API key's invoice creation limit of 1200 per minute, which is separate from the limit on other business endpoints. Each unpaid one later expires and sends an `invoice.expired` webhook. You can recognize these invoices by the `solverr_resource` key in their `metadata`, which holds the method and path the invoice pays for, such as `GET /premium`.
+- **At most 120 `solverr` payments start each minute.** Each `solverr` payment needs its own deposit address, and one business gets at most 120 new deposit addresses a minute across all its checkouts. Past that, the payer gets `429` with `Retry-After` before anything is sent, so nothing is paid. solverr-agent asks again once when `Retry-After` is 5 seconds or less. With a longer wait, `agent.fetch` throws a `SolverrApiError` with status `429`, and the caller can try again after that wait. Credits and `exact` payments need no deposit address.
+- **Browsers.** Paywall responses list `PAYMENT-REQUIRED`, `PAYMENT-RESPONSE` and `Solverr-Credit-Balance` in `Access-Control-Expose-Headers`. Other CORS headers and preflight handling are up to your app. In Express, CORS headers set before the paywall stay on its responses, including a 402 that replaces your handler's response.

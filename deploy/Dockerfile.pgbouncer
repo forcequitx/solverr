@@ -1,0 +1,15 @@
+# PgBouncer from the PostgreSQL project's own Debian packages (PGDG), on the pinned postgres:17.11 base of deploy/Dockerfile.postgres:
+# its signed apt source is already set up, and its postgres user (uid 999) owns deploy/postgres-tls/server.key.
+# Built by deploy/docker-compose.yml; runs only pgbouncer, as that user.
+FROM postgres:17.11@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+
+# Exact PGDG package version. PgBouncer often fixes flaws reachable before login, so move this pin with every release.
+ARG PGBOUNCER_VERSION=1.26.1-1.pgdg13+1
+# Current Debian security updates, the CA bundle PgBouncer's TLS setup loads at start, and PgBouncer.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends ca-certificates "pgbouncer=${PGBOUNCER_VERSION}" \
+ && rm -rf /var/lib/apt/lists/*
+
+USER postgres
+ENTRYPOINT []

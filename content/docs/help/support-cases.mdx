@@ -1,0 +1,94 @@
+---
+title: Help page and support cases
+icon: lifebuoy
+description: How customers look up a payment and report a problem on the public help page, what the report contains, and how you follow each support case.
+---
+
+Every Solverr app has a public help page at `https://your-solverr-host/help`, where customers look up a payment and report a problem when a payment did not go as expected. The failed-payment screen on the checkout links straight to it.
+
+## What the customer does
+
+### 1. Find the payment
+
+1. The customer enters the payment ID (the invoice id, which starts with `inv_`) or the transaction hash from their wallet or exchange.
+2. The help page shows the payment's current status in plain words. For a payment ID, it also links back to the checkout.
+
+### 2. Report a problem
+
+If the payment is stuck, or the help page cannot find it, the customer opens a case.
+
+1. Under **What happened?** they choose one of these problems:
+   - Payment sent, but nothing happened
+   - Sent on the wrong network
+   - Sent a different coin
+   - Forgot the memo
+   - Cannot find the payment
+2. They enter their transaction hash and the network they actually sent on, plus optional details.
+3. They select **Open support case**.
+4. The help page shows a ready-made report with **Copy report** and an **Open NEAR Intents support** button. The customer sends the report there.
+
+## What goes into the report
+
+| Field | Meaning |
+|---|---|
+| Case id | Starts with `case_` |
+| Transaction hash and network | What the customer sent |
+| Problem | The kind of case |
+| Details | The customer's optional description |
+| Invoice id | When the customer entered the invoice id |
+| Correlation id | NEAR Intents' reference for the quote |
+| Deposit address and memo | Where the customer was asked to send |
+| Expected | The amount, coin and network of the quote |
+| Quote signature | NEAR Intents' signature of the quote terms |
+
+A match by transaction hash alone does not show the invoice id to the customer, because anyone can read a transaction hash on the blockchain. You still see the invoice in your dashboard. Solverr also corrects the kind of case from what it knows:
+
+- If the network the customer names differs from the quote's network, the case becomes `wrong_chain`.
+- If no invoice matches the id or hash, the case becomes `not_found`.
+
+## What you see
+
+When a case matches one of your invoices, Solverr tells you in three ways:
+
+1. A dashboard alert names the case and the invoice.
+2. Your server receives a `support_case.created` webhook with the case and the invoice.
+3. The case appears in **Dashboard → Support** with its report, a **Copy report** button and a link to the invoice.
+
+After 30 cases for your business in 24 hours, later cases skip the alert and the webhook and appear only in **Dashboard → Support**.
+
+When a swap fails during a payment, Solverr opens a **Failed swap** case itself. It appears in **Dashboard → Support** with an alert, and your server receives `invoice.failed`. When you or NEAR Intents support have solved a case, select **Mark resolved**.
+
+## Build your own help page
+
+Both steps of the help page are public API calls, so you can build them into your own support page. Start with a lookup of the payment:
+
+```bash
+curl "https://your-solverr-host/api/v1/support-cases/lookup?tx_hash=0xabc123def4567890"
+```
+
+A transaction hash is public on the blockchain, so a lookup by `tx_hash` returns only the payment status, `{ "object": "payment_lookup", "status": "paid" }`. A lookup by `invoice_id` returns the full payment details.
+
+Then open a case with the invoice id, the transaction hash, the network the customer sent on and the kind of problem:
+
+```bash
+curl https://your-solverr-host/api/v1/support-cases \
+  -H "Content-Type: application/json" \
+  -d '{
+    "invoice_id": "inv_7h3K9dWq2LmN4pRt6vXy",
+    "tx_hash": "0xabc123def4567890",
+    "chain": "eth",
+    "kind": "wrong_chain",
+    "details": "I sent USDT on Ethereum instead of TRON."
+  }'
+```
+
+```json
+{
+  "id": "case_3vN7rB2sT4mW8xQ5kL9p",
+  "kind": "wrong_chain",
+  "report_text": "Solverr support case case_3vN7rB2sT4mW8xQ5kL9p\ntx hash: 0xabc123def4567890\nchain: eth\nproblem: wrong_chain\n…",
+  "support_url": "https://t.me/near_intents"
+}
+```
+
+`chain` takes the chain codes from [Chains and coins](/docs/payments/chains-and-coins), and `kind` is one of `wrong_chain`, `wrong_coin`, `missing_memo`, `stuck` or `not_found`. Case creation is limited to 5 per minute per IP address, 20 per minute per network and 5 per payment per 24 hours. Reporting the same transaction for the same payment again returns the case that is already open. When a payment already has 5 cases from the last 24 hours, the API answers `429` with `code: "too_many_attempts"` and a `Retry-After` header that gives the seconds until the oldest of them is a day old.

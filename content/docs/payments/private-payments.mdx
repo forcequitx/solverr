@@ -1,0 +1,51 @@
+---
+title: Private payments
+icon: eye
+description: How private payments use NEAR Intents Confidential Intents to hide the on-chain link between a customer's payment and your payout, and what stays public.
+---
+
+Private payments hide the on-chain link between a customer's payment and the money that reaches your payout wallet. Solverr asks NEAR Intents for a confidential quote for every payment, and NEAR Intents settles the swap through Confidential Intents on a private NEAR instance. Amounts and timing stay visible, so a private payment is not anonymous. Customers pay the same way, and the money arrives at your normal payout wallet.
+
+## What stays public
+
+- The customer's transaction to the one-time payment address is visible on its own blockchain, like any transfer.
+- The transfer that delivers the coin you receive to your payout wallet is visible on its blockchain.
+- The conversion between the two settles on a private NEAR instance that public explorers do not show. No on-chain record connects the two transactions.
+- Amounts and timing are not hidden. The delivery to your wallet is exactly the payment amount in the coin you receive, and the public payment page still shows that amount and the payment time. Someone who compares amounts and times can still match the two transactions.
+
+The receipt of a private payment shows the customer's transaction and the payment proof, but not the delivery to your wallet, and explains that public explorers do not show the conversion. Your dashboard and webhooks still show every transaction, and the API marks these payments with `confidential: true`.
+
+## Server requirements
+
+Private payments need two settings on the Solverr server:
+
+- `ONECLICK_API_KEY`: your NEAR Intents partner key, from the partner dashboard at partners.near-intents.org. NEAR Intents refuses confidential quotes without a valid partner key.
+- `ONECLICK_CONFIDENTIALITY`: the Confidential Intents level Solverr asks for, `basic` or `advanced`.
+
+When either setting is missing, the **Private payments** switch in Settings is grayed out and says why. If private payments were already on, Settings warns that customers cannot pay until you turn them off.
+
+## Turn on private payments
+
+Only the owner of the business can turn private payments on or off.
+
+1. Open **Dashboard → Settings → Coin you receive**.
+2. Turn on the **Private payments** switch.
+3. Select **Save**.
+
+Every payment address created after you save is confidential. Saving a change to the switch, on or off, retires every open payment address of your business: open checkouts stop showing the old address, and the customer gets a new one with the new setting. A payment already sent to an earlier address completes with the setting that address was created with. During setup, the same switch is in the **Where you get paid** step, and **Finish setup** saves it.
+
+## When NEAR Intents refuses
+
+Solverr never turns a private payment into a public one. If NEAR Intents refuses a confidential quote, or does not confirm it as confidential, the customer sees "Private payments are not available right now. Try again later, or contact the business." The owner gets a notice with the reason in the dashboard inbox, and by email when email is set up, at most once an hour.
+
+Customers cannot pay until the problem is fixed. Turn private payments off, or ask whoever runs your Solverr server to check the two settings above.
+
+The minimums in the checkout's coin list come from public quotes. Confidential Intents can refuse a coin or an amount that a public payment accepts. The checkout then tells the customer that the coin cannot be used and to choose another one.
+
+## Refunds and payouts
+
+Refunds and payouts you send from the dashboard are not confidential. A same-coin transfer goes straight from your wallet to the recipient, and a transfer that converts to another coin uses a public NEAR Intents quote.
+
+<Callout type="info">
+After you turn private payments on, make one small payment to check that NEAR Intents accepts confidential quotes for your business.
+</Callout>

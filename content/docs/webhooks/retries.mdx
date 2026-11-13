@@ -1,0 +1,67 @@
+---
+title: Retries and delivery rules
+icon: subscriptions
+description: How Solverr retries failed webhook deliveries over about 2.7 days, pauses slow endpoints, logs each delivery, and which webhook URLs it accepts.
+---
+
+Solverr keeps every webhook event and makes up to 9 attempts (8 retries) to deliver each one over about 2.7 days, so a short outage on your server does not lose a payment event.
+
+## What counts as delivered
+
+A delivery succeeds when your endpoint answers with any 2xx status within 10 seconds. Any other status, a timeout or a connection error is a failure. Redirects are not followed, so a 301 or 302 answer also fails. Save the final URL.
+
+## Retry schedule
+
+The worker sends a new event within a few seconds. After a failure, it waits and tries again on this schedule:
+
+| Attempt | When |
+|---|---|
+| 1 | Right away |
+| 2 | 1 minute after attempt 1 |
+| 3 | 5 minutes after attempt 2 |
+| 4 | 30 minutes after attempt 3 |
+| 5 | 2 hours after attempt 4 |
+| 6 | 5 hours after attempt 5 |
+| 7 | 10 hours after attempt 6 |
+| 8 | 24 hours after attempt 7 |
+| 9 | 24 hours after attempt 8 |
+
+That makes 9 attempts over about 2.7 days. Each wait varies by up to 10% either way, so the retries from one outage do not all reach your server at once. Every attempt is signed again with a fresh `webhook-timestamp`; the event `id` stays the same.
+
+When your endpoint answers `429`, `502`, `503` or `504` with a `Retry-After` header (in seconds or as a date), the next attempt waits at least that long, up to 24 hours.
+
+When your endpoint does not answer (timeout or connection error), or answers with an error after 5 seconds or more, Solverr pauses your deliveries for 5 minutes. Your other events due in the same run record that failed attempt and move to their next retry. Events that come due during the pause wait until it ends. A successful delivery, or saving the webhook URL again, ends the pause.
+
+Events can arrive out of order and more than once. Use the event `id` to skip events you already handled, and read the current state from the API when order matters.
+
+## Turning webhooks off from your server
+
+When your endpoint answers `410 Gone`, Solverr stops sending webhooks to it. That delivery and every waiting one are marked as failed, no new events are queued, and the owner gets one alert. The **Webhook** card in **Dashboard → Developers** shows **Stopped**. To turn webhooks back on, save the webhook URL again there.
+
+After the last attempt fails, the delivery is marked as failed and an alert appears in your dashboard. The owner also gets the alert by email when the Solverr server can send email and the owner signed in with an email address. An endpoint that keeps failing raises at most one such alert a day; the delivery log shows every failure. When you remove the webhook URL, waiting deliveries are marked as failed at once.
+
+A failed webhook never changes the payment. The invoice is still `paid` in the dashboard and in `GET /api/v1/invoices/:id`, so you can always read the current status from the API.
+
+## Delivery log
+
+The **Delivery log** in **Dashboard → Developers** shows recent deliveries with their event type, status (**Pending**, **Delivered** or **Failed**), number of attempts and the last response code or error.
+
+Select **Resend** to send a delivery again at once, for example after you fix your endpoint. The resend goes to the webhook URL saved at that moment and counts as the next attempt. If the resend fails:
+
+- A pending delivery continues the retry schedule from that attempt instead of starting again.
+- A failed delivery with attempts left, for example one stopped early by a `410 Gone`, goes back on the retry schedule from that attempt.
+- A delivery that already used all 9 attempts stays failed, and no second alert is sent.
+
+**Resend** appears only while a webhook URL is saved and webhooks are not stopped by a `410 Gone`. When you remove the webhook URL, the deliveries still waiting are marked as failed with "The webhook URL was removed."
+
+Solverr keeps delivered and failed deliveries for 30 days, then deletes them along with dashboard alerts older than 30 days. Pending deliveries are kept until they finish. Payments are never deleted.
+
+## Allowed webhook URLs
+
+These rules keep a webhook URL from reaching Solverr's own network. Solverr checks them when you save a URL and again before every delivery.
+
+- The URL must use `https`.
+- The host must resolve to a public internet address. Private, loopback, link-local and other reserved ranges are refused for IPv4 and IPv6.
+- The URL must not contain a username or password.
+
+When Solverr itself runs in development mode, it also allows `http://localhost`, `http://127.0.0.1` and `http://[::1]`, so you can test against a server on your own machine.

@@ -1,0 +1,43 @@
+# HTTPS front for GlitchTip, the error dashboard. Caddy obtains and renews the certificate for GLITCHTIP_HOST.
+# The website itself runs on Vercel.
+
+{
+	# Slow clients cannot hold connections open while sending headers or bodies.
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 30s
+			idle 2m
+		}
+	}
+}
+
+# The GlitchTip dashboard, and the address the website on Vercel sends its error reports to. The worker sends its reports
+# to GlitchTip directly over the backend network.
+{$GLITCHTIP_HOST} {
+	encode zstd gzip
+
+	# GlitchTip accepts error reports and uploads up to 40 MB.
+	request_body {
+		max_size 40MB
+	}
+
+	log {
+		output stdout
+		format filter {
+			wrap json
+			request>remote_ip ip_mask 24 48
+			request>client_ip ip_mask 24 48
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	reverse_proxy glitchtip:8000
+}

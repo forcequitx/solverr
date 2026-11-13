@@ -1,0 +1,88 @@
+---
+title: Refunds
+icon: undo
+description: Refund a paid invoice from your payout wallet in the dashboard or with the API, cancel an unsent refund, and see how refunds are sent and tracked.
+---
+
+A refund returns money for a paid invoice from your payout wallet: Solverr prepares the transfer, and you approve it in your wallet. Refunds that NEAR Intents makes on its own, after an underpayment, a failed swap or a payment to an expired address, go back to the customer automatically and need nothing from you.
+
+## Refund from the dashboard
+
+1. Open **Dashboard → Payments** and select the paid invoice.
+2. Select **Refund**. Solverr creates a pending refund and opens its page.
+3. On that page, connect your payout wallet, select **Send from your wallet**, and approve the transfer in your wallet.
+4. Check the refund in **Dashboard → Refunds & payouts**.
+
+When the refund reaches the customer, its status becomes `completed` and you get a `refund.completed` webhook.
+
+To refund an [extra payment](/docs/help/payment-mistakes#7-the-customer-paid-twice) when a customer paid twice, select **Refund this extra payment** next to that payment on the invoice's page, then follow steps 3 and 4.
+
+## Refund with the API
+
+`POST /api/v1/refunds` creates a pending refund for a paid invoice:
+
+```bash
+curl https://your-solverr-host/api/v1/refunds \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"invoice_id":"inv_7h3K9dWq2LmN4pRt6vXy","amount":"10.00"}'
+```
+
+```json
+{
+  "id": "ref_6sT2mW9xQpL4vN8kB3rZ",
+  "object": "refund",
+  "status": "pending",
+  "invoice_id": "inv_7h3K9dWq2LmN4pRt6vXy",
+  "batch_id": null,
+  "amount": "10",
+  "source_asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+  "asset_id": "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
+  "recipient": "0x1111111111111111111111111111111111111111",
+  "tx_hash": null,
+  "failure_reason": null,
+  "sign_url": "https://your-solverr-host/dashboard/transfers/ref_6sT2mW9xQpL4vN8kB3rZ",
+  "created_at": "2026-11-05T12:30:00.000Z"
+}
+```
+
+Nothing is sent until you open `sign_url` and approve the transfer from your wallet. `GET /api/v1/refunds` lists your refunds, newest first, and `GET /api/v1/refunds/:id` returns one. The [MCP server](/docs/agents/mcp) has a `create_refund` tool that works the same way.
+
+## Cancel a refund
+
+A refund that was not sent can be canceled. Select **Cancel transfer** on its page, or send `POST /api/v1/refunds/:id/cancel`. The refund becomes `canceled`, you get a `refund.canceled` webhook, and its amount can be refunded again.
+
+Once you have selected **Send from your wallet**, these rules apply:
+
+- A refund your wallet already sent cannot be canceled. If your wallet sent coins to a refund's NEAR Intents deposit address, canceling is refused because NEAR Intents still delivers them. Record the transaction instead.
+- The dashboard can still cancel the refund after you confirm that nothing left your wallet.
+- The API refuses with `409`: always for a same-coin refund, and for a converted refund until its NEAR Intents deposit address stops accepting coins, about 80 minutes after it was prepared. The error message gives the time.
+
+If a converted refund's coins reach NEAR Intents but the transaction was never recorded, for example because the page was closed, Solverr notices and completes the refund.
+
+## How a refund is sent
+
+- **Which payment.** Without `payment_id`, the refund is for the payment that paid the invoice. Pass an extra payment's id as `payment_id` to refund that payment instead.
+- **Who receives it.** The refund goes to the refund address of that payment, in the coin the customer paid with.
+- **How much.** `amount` is in the coin you receive. It defaults to what is left of that payment: the invoice's settlement amount minus earlier refunds of the same payment that did not fail and were not canceled. Send a smaller amount for a partial refund.
+- **Same coin.** If the customer paid in the coin you receive on your network, your wallet sends it straight to them.
+- **Different coin.** NEAR Intents swaps it. Your wallet sends your coin to a one-time deposit address, and the customer receives their coin minus the swap fee. Any temporary NEAR Intents minimum on that route applies.
+- **If the swap does not go through.** NEAR Intents returns your coin to your wallet, the refund becomes `failed` with a reason, and you get a dashboard alert and a `refund.failed` webhook.
+- **If the deposit never arrives.** A swap refund whose wallet transaction was recorded becomes `failed` when its deposit address received nothing by one hour after its deadline, and its amount can be refunded again. NEAR Intents refunds anything that arrives later. A swap refund that was prepared but never recorded stays `pending`, and Solverr stops watching its deposit address. On the refund's page, record the transaction if your wallet sent it, select **It was not sent: send again**, or cancel the refund.
+
+## Statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | Created and waiting for you to approve it from your wallet |
+| `processing` | Your wallet sent it, and Solverr is waiting for the transaction to be final on-chain (same coin) or for the swap to finish (different coin) |
+| `completed` | The customer received it, checked on-chain |
+| `failed` | The transaction failed or never appeared on-chain, it sent something else, or the swap did not complete; `failure_reason` says why |
+| `canceled` | Canceled before it was sent; nothing left your wallet |
+
+## Rules and limits
+
+- Only paid invoices can be refunded. Any other invoice returns `409 invalid_state`.
+- All refunds of one payment together cannot exceed the invoice's settlement amount, not counting failed or canceled refunds. A larger amount returns `409 invalid_state` with a message such as "At most 15 USDC of this payment can still be refunded."
+- A payment that settled on a network you no longer use for payouts cannot be refunded through Solverr. Refund it from the wallet that received it.
+- Refunding an agent's credit top-up removes the same share of its credits from the balance at once. If the agent already spent them, the refund returns `409 invalid_state` with the amount still left; refund less. If the refund later fails, the credits are given back.

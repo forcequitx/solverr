@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "solverr"
+version = "0.1.1"
+description = "Server SDK for the Solverr crypto payment API."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["solverr", "payments", "crypto", "checkout", "webhooks"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/forcequitx/solverr/tree/main/packages/python#readme"
+Source = "https://github.com/forcequitx/solverr/tree/main/packages/python"
+Issues = "https://github.com/forcequitx/solverr/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/solverr"]

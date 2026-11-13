@@ -1,0 +1,110 @@
+---
+title: Chains and coins
+icon: chain
+description: The 31 chains customers can pay on, which of them can hold your payout wallet, how to list supported coins, and how route minimums work.
+---
+
+Customers can pay on the 31 chains below, in every coin NEAR Intents supports on those chains. Ten of these chains can also hold your payout wallet. NEAR Intents can set a temporary minimum on any route.
+
+## Supported chains
+
+| Chain and code | Address type | Payouts |
+|---|---|---|
+| NEAR `near` | NEAR account | Yes |
+| Ethereum `eth` | EVM | Yes |
+| Base `base` | EVM | Yes |
+| Arbitrum `arb` | EVM | Yes |
+| Optimism `op` | EVM | Yes |
+| Polygon `pol` | EVM | Yes |
+| BNB Chain `bsc` | EVM | Yes |
+| Avalanche `avax` | EVM | Yes |
+| Solana `sol` | Solana | Yes |
+| Gnosis `gnosis` | EVM | No |
+| Berachain `bera` | EVM | No |
+| Monad `monad` | EVM | No |
+| X Layer `xlayer` | EVM | No |
+| Scroll `scroll` | EVM | No |
+| Plasma `plasma` | EVM | No |
+| Abstract `abs` | EVM | No |
+| HyperEVM `hypercore` | EVM | Yes |
+| TRON `tron` | TRON | No |
+| Bitcoin `btc` | Bitcoin | No |
+| Litecoin `ltc` | Litecoin | No |
+| Dogecoin `doge` | Dogecoin | No |
+| Bitcoin Cash `bch` | Bitcoin Cash | No |
+| Dash `dash` | Dash | No |
+| Zcash `zec` | Zcash | No |
+| XRP Ledger `xrp` | XRP | No |
+| Stellar `stellar` | Stellar | No |
+| TON `ton` | TON | No |
+| Sui `sui` | Sui | No |
+| Aptos `aptos` | Aptos | No |
+| Cardano `cardano` | Cardano | No |
+| Starknet `starknet` | Starknet | No |
+
+The code is the chain's `blockchain` value in the API, as used in the [coin list](#which-coins). **Payouts** says whether the chain can hold your [payout wallet](/docs/payments/settlement). That needs a chain where you can verify a wallet by signing a message.
+
+### Chains with special rules
+
+- **Stellar.** Deposits need a memo. The checkout shows it in large type with its own copy button and asks the customer to confirm they entered it. The checkout has no wallet payment for Stellar, so customers always send manually and enter the memo themselves.
+- **XRP Ledger, Stellar and TON.** Exchange addresses on these chains usually need a memo or tag that refunds cannot include, so the checkout asks for a personal wallet address for refunds. On XRP, only classic addresses starting with `r` are accepted.
+
+## Which coins
+
+The coin list comes live from NEAR Intents and changes over time. Read it from the public tokens endpoint:
+
+```bash
+curl https://your-solverr-host/api/v1/tokens
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "asset_id": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+      "symbol": "USDC",
+      "blockchain": "base",
+      "chain_name": "Base",
+      "decimals": 6,
+      "price_usd": 0.9999,
+      "contract_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    }
+  ]
+}
+```
+
+The list includes only coins on the chains in the table above and is cached for 60 seconds.
+
+## How customers pay
+
+On the checkout page, customers pay in one of two ways:
+
+- **Wallet.** On EVM chains, Solana and NEAR, customers connect a wallet and pay in one step. Bitcoin, TRON and TON wallets pay only the chain's own coin (BTC, TRX or TON). Tokens on those chains, such as USDT on TRON, are sent manually.
+- **Send manually.** On every chain, customers confirm the network and a refund address, then scan a QR code or copy the payment address and the exact amount.
+
+## Route minimums
+
+NEAR Intents can set a temporary minimum on a route and change it without notice. These minimums are NEAR Intents rules, not Solverr settings. NEAR Intents does not publish them, so Solverr measures them.
+
+Every 30 minutes, the worker sends a dry quote from every payable coin into each coin that businesses receive and stores the answers. [`GET /api/v1/route-limits`](/docs/api/listRouteLimits) returns them.
+
+### What the customer sees
+
+- **In the coin list.** Each coin shows the smallest payment that worked in its latest measurement, such as "Min: $X", or "Min: $1" when the $1 test worked. A coin that cannot pay this invoice's amount shows its minimum or "Low Liq" in orange and cannot be chosen.
+- **After choosing a coin.** Measurements run every 30 minutes, and the checkout accepts one up to two hours old. The checkout therefore also checks the chosen coin live with NEAR Intents before asking how the customer pays. If the route is refused, the checkout says so at once, for example: "USDT on TRON needs a payment of at least $X right now. Pay with USDC on Base, or choose another coin."
+- **The suggested coin.** It is always the coin you receive on your payout network. **Change coin** takes the customer back to the coin list.
+
+### What you see
+
+When you choose a coin in step 3 of setup, Solverr checks it the same way once your payout wallet is verified on that network. If NEAR Intents refuses small payments into that coin, a warning names the current minimum, so you can pick another coin or payout network before customers are affected. **Dashboard → Settings** shows no such warning, because the checkout already stops customers from choosing a coin that cannot pay.
+
+The payout network and coin pickers, in setup and in **Dashboard → Settings**, can mark one option **Recommended**: the one that most payable coins reach from $1 in the worker's measurements from the last two hours. Only coins that businesses already receive are measured, so the tag appears only when at least two options in a list have recent measurements and one is ahead of the rest.
+
+<Callout type="info">
+For small prices, receive a widely held stablecoin such as USDC on Base, Arbitrum or Ethereum, so most customers can pay in the same coin.
+</Callout>
+
+## How long a payment takes
+
+Most payments complete within a few minutes, depending on the networks involved. The checkout updates by itself, and Solverr keeps following the payment after the customer closes the page.

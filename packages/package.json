@@ -1,0 +1,10 @@
+{
+  "name": "solverr-packages",
+  "private": true,
+  "workspaces": [
+    "embed",
+    "react",
+    "x402",
+    "agent"
+  ]
+}

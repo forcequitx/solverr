@@ -1,0 +1,18 @@
+{
+  "title": "Solverr docs",
+  "pages": [
+    "---Get started---",
+    "index",
+    "quickstart",
+    "team",
+    "---",
+    "no-code",
+    "integrate",
+    "webhooks",
+    "agents",
+    "payments",
+    "help",
+    "api",
+    "..."
+  ]
+}

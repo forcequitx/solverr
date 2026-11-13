@@ -1,0 +1,50 @@
+---
+title: Team members
+icon: users
+description: The owner, developer and viewer roles, what each one can change, and how to add, change or remove a teammate in the dashboard.
+---
+
+Each Solverr business has one owner, the person who created it. The owner can add teammates as developers or viewers. Each teammate signs in with their own email or wallet, and their role decides what they can see and change.
+
+## Roles
+
+| Role | What it can do |
+|---|---|
+| **Owner** | Everything a developer can do, plus the settings that decide where money goes and who can move it: the payout wallet, the coin you receive and private payments, revenue splits, API keys, the webhook endpoint and its signing secret, Earn withdrawals, and adding and removing teammates. The owner cannot be removed. |
+| **Developer** | Manages the business profile, payment links, subscriptions, refunds and payouts, the Telegram bot and support cases, sends ping events and resends webhook deliveries. Sees the payout wallet, the coin you receive, revenue splits, Earn holdings, the team, API keys and the webhook endpoint, but cannot change them. |
+| **Viewer** | Opens every dashboard page and exports payments, but cannot change anything. Viewers see no edit controls. |
+
+<Callout type="info">
+Only the owner can change the payout wallet, because it decides where all revenue goes. Each change needs a signature from the new wallet, given now or at an earlier sign-in with it.
+
+These actions also need a sign-in within the last 30 minutes, so a session left open on another device cannot redirect payments or grant access. With an older sign-in, Solverr asks you to sign out and sign in again first.
+
+- Changing an existing payout wallet (owner). Choosing the first one during setup has no time limit.
+- Creating an API key, changing the webhook endpoint or rotating its signing secret (owner). These keep working after you sign out other devices, so each one raises an "Access to your business changed" alert.
+- Adding a teammate (owner). The teammate keeps access after you sign out other devices, so each addition raises a "Your team changed" alert.
+- Changing the business website once the payout wallet is verified (owner or developer), because customers return to the website after paying. Each change raises a "Business website changed" alert.
+
+Each of these actions, and each revenue split you add, raises a dashboard alert and, when email is set up, an email to the owner. Teammates can mark the inbox as read, but these alerts stay unread until the owner reads them.
+</Callout>
+
+## Add a teammate
+
+1. Ask your teammate to sign in to Solverr once, with an email or a wallet. They can stop at the setup step.
+2. Open **Dashboard → Settings → Team**.
+3. Enter their email or wallet address and choose **Developer** or **Viewer**.
+4. Select **Add**.
+
+If no account uses the email or wallet you entered, Solverr says so. Otherwise, your business appears in your teammate's account menu, with their role under its name. The account menu is at the bottom of the dashboard sidebar and opens upward. On a phone, select the menu button at the top of the screen; the account menu is at the bottom of the menu that opens.
+
+You can select **Add** at most 20 times per hour, counted for your login across all the businesses you own. Attempts that find no account and role changes count too.
+
+When your teammate also owns a business, Solverr opens their own business first after they sign in, unless they last picked or created another business in the account menu in that browser. Setup always works on a business they own, never on one they were added to. A teammate who owns no business sees a line at the top of the dashboard that says the business belongs to another account and explains how to create their own.
+
+## Change or remove a teammate
+
+Only the owner sees the controls to change or remove a teammate. To change a role, add the same email or wallet again with the new role. The owner's own role cannot be changed. To remove a teammate, select **Remove** next to them.
+
+## Businesses and sign-in methods
+
+- **Several businesses per login.** One login can own businesses and belong to other teams. The account menu at the bottom of the dashboard sidebar lists them with your role in each. **Create a business** starts a new one that you own. The dashboard opens the business you last picked or created in this browser. Without one, it opens the first business you own, or the first one you joined when you own none.
+- **Teammates do not share sign-in methods.** **Settings → Sign-in methods** shows only the wallets and email of the person signed in. The same card shows how many other devices are signed in to your account, and **Sign out other devices** signs them all out, for example after you used a shared computer. Linking or removing a sign-in wallet needs a sign-in within the last 30 minutes, and each newly linked wallet raises an alert and an email to you. **Remove** appears next to a wallet only while another wallet or your email can still sign you in.

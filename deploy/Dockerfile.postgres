@@ -1,0 +1,33 @@
+# Postgres with WAL-G for continuous WAL archiving and point-in-time recovery (README, "Point-in-Time Backups").
+# Pinned by tag and digest; built by deploy/docker-compose.yml.
+
+# WAL-G is built from its release commit with a current Go: the published binaries are built with an older Go whose TLS
+# and certificate checks have known flaws, and WAL-G uses them for HTTPS to the bucket. Go checks every module against go.sum.
+FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS wal-g
+ARG WALG_VERSION=v3.0.9
+ARG WALG_COMMIT=3e493188db28335fb93a45bd680c6ff8fc3028c1
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libsodium-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN git init /src \
+ && git -C /src fetch --depth 1 https://github.com/wal-g/wal-g.git "${WALG_COMMIT}" \
+ && git -C /src checkout --quiet FETCH_HEAD
+WORKDIR /src/main/pg
+# Libraries with security fixes newer than the release, moved to their fixed patch versions (checked against go.sum's database).
+RUN go get github.com/go-jose/go-jose/v4@v4.1.6 golang.org/x/net@v0.62.0 google.golang.org/grpc@v1.83.2 \
+ && go mod tidy
+# The libsodium tag enables WALG_LIBSODIUM_KEY encryption; compression stays on WAL-G's default (lz4, pure Go).
+RUN CGO_ENABLED=1 go build -trimpath -tags libsodium \
+    -ldflags "-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=${WALG_VERSION} -X github.com/wal-g/wal-g/cmd/pg.gitRevision=${WALG_COMMIT}" \
+    -o /wal-g .
+
+FROM postgres:17.11@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+
+# Current Debian security updates (the upstream image can lag behind them), the CA certificates WAL-G needs for HTTPS to
+# the bucket, which the official image ships without, and the libsodium WAL-G encrypts with.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends ca-certificates libsodium23 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=wal-g /wal-g /usr/local/bin/wal-g

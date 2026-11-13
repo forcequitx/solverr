@@ -1,0 +1,84 @@
+---
+title: Telegram bot
+icon: send
+description: Connect a Telegram chat to your business, create invoices, payment links and tip links with bot commands, and get a message for each payment.
+---
+
+The Solverr Telegram bot creates invoices and payment links from a private chat and messages you when an invoice is paid. You type a command, and the bot answers with a payment page or a link you can forward to the customer.
+
+## Connect a chat
+
+1. Open **Dashboard → Settings → Telegram** and select **Connect a Telegram chat**. Solverr shows a one-time code and a link to the bot.
+2. Select the bot's link and press **Start** in Telegram, or open the bot yourself and send `/connect CODE` with your code.
+3. Wait for the bot to answer "Connected to" and your business name.
+
+The code works once, for 10 minutes. If it has expired, create a new one.
+
+A chat is linked to one business at a time. Connecting it again with a new code from the same business replaces the earlier link. To link it to a different business, send `/disconnect` first, then connect with a code from the other business.
+
+The bot works only in a private chat with you. In a group, it answers every command with "This bot works only in a private chat. Send it a direct message."
+
+If **Settings → Telegram** says "The Telegram bot is not available yet.", the operator of this server has not set up the bot. [Set up the bot on your own server](#set-up-the-bot-on-your-own-server) explains how.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/invoice 25 USD Two coffees` | Creates an invoice and answers with its payment page. The description at the end is optional. |
+| `/paylink 4.50 USD Flat white` | Creates a reusable [payment link](/docs/no-code/payment-links) with a fixed price. The title at the end is required. |
+| `/tiplink Tip jar` | Creates a [tip link](/docs/no-code/tip-links) in USD, where the customer chooses the amount. |
+| `/payments` | Lists your five newest invoices with their amount, status and description. |
+| `/disconnect` | Unlinks this chat, so it stops receiving payment messages. |
+| `/help` | Lists the commands. |
+
+The amount must be greater than 0 with up to 2 decimals. The currency must be `USD`, `EUR` or `INR`. Titles longer than 120 characters are cut off. An `/invoice` description longer than 500 characters is refused with "The description can be at most 500 characters."
+
+`/invoice`, `/paylink` and `/tiplink` need a verified payout wallet. Only the owner can verify one, in **Dashboard → Settings → Payout wallet**.
+
+The invoices and links the bot creates are real. They appear in the dashboard and send the usual [webhooks](/docs/webhooks/events), as if you had created them there. A chat acts with the role of the teammate who connected it, and only owners and developers can connect one. If that teammate later becomes a viewer, the chat can still list payments but can no longer create invoices or links. If they leave the business, the chat is disconnected and stops receiving payment messages.
+
+<Callout type="warn">
+Anyone who can use your Telegram account can create invoices and links from the connected chat, see your newest invoices, and disconnect the chat. Keep your Telegram account secure.
+</Callout>
+
+## Payment messages
+
+When an invoice is paid, every chat linked to your business gets one message, such as:
+
+```text
+Payment received: 25.00 USD · Two coffees
+```
+
+## Disconnect a chat
+
+Send `/disconnect` in the chat, or select **Disconnect** next to the chat in **Dashboard → Settings → Telegram**. Viewers cannot connect or disconnect chats from the dashboard.
+
+## Set up the bot on your own server
+
+This section is for operators who host Solverr themselves. The bot stays off until both environment variables below are set. Until then, `/api/telegram` answers `404`.
+
+1. In Telegram, create a bot with @BotFather and copy its token.
+2. Add both variables to the server's `.env`. For the secret, use a random string such as the output of `openssl rand -hex 32`.
+
+```bash
+TELEGRAM_BOT_TOKEN=<bot token>
+TELEGRAM_WEBHOOK_SECRET=<webhook secret>
+```
+
+3. Register the webhook with Telegram once, replacing `<APP_URL>` with your Solverr app's public HTTPS address.
+
+```bash
+curl "https://api.telegram.org/bot<bot token>/setWebhook" \
+  -d "url=<APP_URL>/api/telegram" \
+  -d "secret_token=<webhook secret>"
+```
+
+4. Restart the web app and the worker.
+
+Telegram allows only letters, digits, `_` and `-` in the secret. It delivers webhooks only to HTTPS, so you cannot register the webhook for `localhost`. After the restart, the web app answers commands and the worker sends payment messages.
+
+Telegram sends the secret in the `X-Telegram-Bot-Api-Secret-Token` header of every update. A request with a missing or different secret gets `401` and is ignored.
+
+<Callout type="warn">
+The bot token controls the bot. Keep it in the server's environment only, never in code, chats or screenshots.
+</Callout>

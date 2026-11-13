@@ -1,0 +1,45 @@
+---
+title: Tip links
+icon: coins
+description: Create a payment link without a fixed amount, in the dashboard or with the API, so the customer types how much to pay for a tip or donation.
+---
+
+A tip link is a [payment link](/docs/no-code/payment-links) without a fixed amount: the customer types how much to pay before the checkout opens. Use it for tips, donations or pay-what-you-want prices.
+
+## Create a tip link
+
+### In the dashboard
+
+1. Open **Dashboard → Payment links**.
+2. Under **What is it for?**, enter the title, for example "Tip the barista".
+3. Leave **Amount** empty and choose the **Currency**.
+4. Select **Create link**.
+
+The new link shows "Customer chooses" in the list instead of an amount.
+
+### With the API
+
+Send the same request as for a payment link, without `amount`:
+
+```bash
+curl https://your-solverr-host/api/v1/payment-links \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Tip the barista","currency":"USD"}'
+```
+
+The response then has `"amount": null`.
+
+## What the customer sees
+
+1. The customer opens the link and sees a field labeled with your currency, for example "Amount in USD".
+2. They type an amount and select **Continue to payment**.
+3. Solverr creates an invoice for that amount and opens the normal checkout.
+
+## Amount limits
+
+The server accepts an amount from 0.01 to 999,999,999,999.99 with at most 2 decimals. A very small amount can still be refused when it is too small to settle in the coin you receive. In both cases, the tip page shows "Enter an amount from 0.01 to 999,999,999,999.99, with up to 2 decimals, for example 10.00."
+
+<Callout type="warn">
+A NEAR Intents route can have a temporary minimum that changes without notice. The coin list shows each coin's minimum, and the customer cannot choose a coin that cannot pay the tip amount. See [Chains and coins](/docs/payments/chains-and-coins#route-minimums).
+</Callout>

@@ -1,0 +1,69 @@
+---
+title: Price list
+icon: list
+description: Publish your paid endpoints and their prices at /.well-known/solverr.json with solverr-x402, from a Next.js or Express route, so agents can check prices first.
+---
+
+A price list at `/.well-known/solverr.json` tells agents which of your endpoints cost money and how much, so they can decide before they call. `solverr-x402` builds the list and serves it from a Next.js or Express route.
+
+## Serve it in Next.js
+
+Create the route file `app/.well-known/solverr.json/route.ts` and export the result of `priceList` as its `GET` handler:
+
+```ts
+import { priceList } from "solverr-x402";
+
+export const GET = priceList(
+  [
+    { path: "/api/premium", method: "GET", price: "0.05", currency: "USD", description: "Premium market data" },
+    { path: "/api/report", method: "POST", price: "1.00", currency: "USD", description: "Full company report" },
+  ],
+  { merchant: "Acme Data" },
+);
+```
+
+## Serve it in Express
+
+In Express, wrap the price list in `expressHandler` and register it on the same path:
+
+```ts
+import { expressHandler, priceList } from "solverr-x402";
+
+app.get(
+  "/.well-known/solverr.json",
+  expressHandler(
+    priceList([{ path: "/premium", method: "GET", price: "0.05", currency: "USD", description: "Premium market data" }], { merchant: "Acme Data" }),
+  ),
+);
+```
+
+## What agents see
+
+For the Next.js example above, a `GET` request to `/.well-known/solverr.json` returns:
+
+```json
+{
+  "version": 1,
+  "merchant": "Acme Data",
+  "endpoints": [
+    { "path": "/api/premium", "method": "GET", "price": "0.05", "currency": "USD", "description": "Premium market data" },
+    { "path": "/api/report", "method": "POST", "price": "1.00", "currency": "USD", "description": "Full company report" }
+  ]
+}
+```
+
+The response is cached for 5 minutes and allows requests from any origin.
+
+## Price list rules
+
+`priceList` checks every route when it is called and throws on the first mistake:
+
+- `path` must start with `/`.
+- `price` must have at most 2 decimals.
+- `currency` must be `USD`, `EUR` or `INR`.
+
+Methods are stored in capitals, whatever case you write them in.
+
+<Callout type="info">
+The price list only informs agents. The price actually charged comes from each route's `paywall` options, so keep the two the same.
+</Callout>

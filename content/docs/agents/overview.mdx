@@ -1,0 +1,35 @@
+---
+title: Agent payments (HTTP 402)
+icon: agents
+description: "How AI agents pay for your API per request with HTTP 402 and x402 v2: the request flow, the solverr and exact schemes, and route minimums on small prices."
+---
+
+AI agents pay for your API per request, without an account or card, through [x402 v2](https://github.com/x402-foundation/x402), a standard for HTTP 402 Payment Required. Solverr adds its own payment scheme, `solverr`: the agent pays with a coin it holds, and NEAR Intents delivers the coin you receive to your payout wallet. Your paywall can also offer the standard `exact` scheme for USDC on Base, Ethereum, Arbitrum, Polygon or Avalanche, as [Paywall middleware](/docs/agents/paywall-middleware#accept-standard-x402-payments-in-usdc) explains.
+
+## How a paid request works
+
+1. The agent calls your endpoint, for example `GET /premium`, without paying.
+2. Your endpoint, protected by [`solverr-x402`](/docs/agents/paywall-middleware), creates a Solverr invoice for the price and answers `402` with a `PAYMENT-REQUIRED` header. The header lists the invoice and the URLs to pay it.
+3. The agent checks the payment against its own spending limits.
+4. The agent asks for a deposit address for a coin it holds, sends the exact amount, and reports the transaction.
+5. NEAR Intents converts the payment and delivers the coin you receive to your payout wallet, and the invoice becomes `paid`.
+6. The agent calls your endpoint again with a `PAYMENT-SIGNATURE` header that names the paid invoice.
+7. Your endpoint checks with Solverr that the invoice is paid, matches this method, path and price, and was not used before, then claims it for this request and runs your handler. Only when your handler answers below 400 does it redeem the invoice and return your handler's response with a `PAYMENT-RESPONSE` header. When your handler throws or answers 400 or higher, the invoice stays unused and the agent can send it again.
+
+Each payment pays for exactly one request. A second request needs a new payment or [prepaid credits](/docs/agents/credits).
+
+## Small prices and route minimums
+
+Per-request prices are usually a few cents, and a NEAR Intents route can have a temporary minimum above the price that changes without notice. The agent kit tries the coin you receive first, then the same coin on other chains, then other stablecoins, and moves on each time a route is refused.
+
+When an agent makes many small calls, [credits](/docs/agents/credits) replace one on-chain payment per request with a single prepaid balance.
+
+## Next steps
+
+<Cards>
+  <Card title="Paywall middleware" href="/docs/agents/paywall-middleware" description="solverr-x402 protects a Next.js route or an Express endpoint." />
+  <Card title="Price list" href="/docs/agents/price-list" description="Publish your prices at /.well-known/solverr.json." />
+  <Card title="Agent kit" href="/docs/agents/agent-kit" description="solverr-agent pays 402s from NEAR and Base within spending limits." />
+  <Card title="Credits" href="/docs/agents/credits" description="An agent prepays once and spends per call." />
+  <Card title="MCP servers" href="/docs/agents/mcp" description="Manage Solverr from Claude Code, and let agents pay through MCP." />
+</Cards>

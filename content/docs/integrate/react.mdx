@@ -1,0 +1,114 @@
+---
+title: React component
+icon: package
+description: Add a Solverr pay button to a React or Next.js app with the PayButton component, set the app address once, and optionally open the checkout in a popup.
+---
+
+`solverr-react` provides a `PayButton` component for React 18 and 19, with support for server rendering and the Next.js App Router. It works like the [script button](/docs/integrate/script-button): by default it opens the full checkout page, and an optional popup mode keeps the customer on your page.
+
+## Install
+
+```bash
+npm install solverr-react
+```
+
+## Add a pay button
+
+```tsx
+import { PayButton } from "solverr-react";
+
+export function Checkout() {
+  return <PayButton baseUrl="https://your-solverr-host" link="lnk_8Fq2xT4mW9pL3vN7rB2s" />;
+}
+```
+
+Pass `link` for a payment link, or `invoice` for an invoice your server created with [`solverr-node`](/docs/integrate/node-sdk). The amount always comes from the link or the invoice on the server, so a customer cannot change the price.
+
+By default, the button renders a normal link (`<a href>`) to `https://your-solverr-host/l/<link id>` for a payment link, or to `https://your-solverr-host/pay/<invoice id>` for an invoice. The customer pays on that full checkout page in the same tab, or opens it in a new tab. There the checkout gets the whole screen, and wallet apps and browser wallet extensions connect more reliably than inside a frame. To keep the customer on your page, [open the checkout in a popup](#open-the-checkout-in-a-popup) instead.
+
+## Set the app address once
+
+When you have several buttons, wrap them in `SolverrProvider` and set `baseUrl` there once. Each `PayButton` inside it then needs only its `link` or `invoice`:
+
+```tsx
+import { SolverrProvider, PayButton } from "solverr-react";
+
+export function Order({ invoiceId }: { invoiceId: string }) {
+  return (
+    <SolverrProvider baseUrl="https://your-solverr-host">
+      <PayButton invoice={invoiceId}>Pay now</PayButton>
+    </SolverrProvider>
+  );
+}
+```
+
+## Know when the customer has paid
+
+The customer leaves your page to pay, so your page gets no callback. Learn about the payment on your server from the [`invoice.paid` webhook](/docs/webhooks/events) or by calling `GET /api/v1/invoices/:id`.
+
+To bring the customer back to your site after payment, set a return address:
+
+- **Invoices your server creates.** Set `redirect_url` when you create the invoice. After payment, the checkout shows a **Back to** button with your business name that takes the customer to your `redirect_url`. The checkout never redirects on its own, so the customer can read the receipt first.
+- **Payment links.** Set a return address when you create the link: **After payment, send customers to (optional)** in the dashboard, or `redirect_url` in the API. Without one, the checkout sends the customer to the business website from your profile. With neither, the customer stays on the **Payment complete** screen, which links to the receipt.
+
+<Callout type="warn">
+A visit to your `redirect_url` does not confirm a payment, because anyone can open that address. Confirm the payment on your server before you ship anything.
+</Callout>
+
+## Open the checkout in a popup
+
+To keep the customer on your page, set `mode="overlay"`. The button then opens the checkout in a popup over your page, and `onPaid` and `onClose` tell your page what happened.
+
+```tsx
+"use client";
+
+import { PayButton } from "solverr-react";
+
+export function Checkout() {
+  return (
+    <PayButton
+      baseUrl="https://your-solverr-host"
+      link="lnk_8Fq2xT4mW9pL3vN7rB2s"
+      mode="overlay"
+      onPaid={(invoice) => console.log("Paid", invoice.id)}
+      onClose={() => console.log("Popup closed")}
+    />
+  );
+}
+```
+
+In the Next.js App Router, the file that passes `onPaid` or `onClose` must start with `"use client"`, because a Server Component cannot pass functions to `PayButton`.
+
+`onPaid` receives an invoice with `id`, `object`, `mode`, `status`, `amount`, `currency`, `order_id` and `receipt_url`. The customer stays on your page, so the popup does not use `redirect_url`.
+
+<Callout type="warn">
+`onPaid` only updates the page, for example to show a thank-you message. Confirm the payment on your server with the [`invoice.paid` webhook](/docs/webhooks/events) before you ship anything.
+</Callout>
+
+### How the popup behaves
+
+- It fills the screen on phones, shows as a centered panel on larger screens, and follows the visitor's light or dark setting.
+- It closes with the close button, the Escape key, the browser's close request (such as the Android back gesture), or when the checkout asks to close.
+- Page scrolling pauses and keyboard focus stays in the popup until it closes. Focus then returns to the element that had it when the popup opened, usually the button that opened it.
+- Animations turn off for visitors who ask for reduced motion.
+- The popup passes your page's address to the checkout, and the checkout sends its paid and close messages to that address only.
+- Only messages from the checkout frame on your Solverr app's address are accepted.
+
+## Props
+
+| Prop | Type | What it does |
+|---|---|---|
+| `link` | `string` | Payment link id (`lnk_…`), used instead of `invoice` |
+| `invoice` | `string` | Invoice id (`inv_…`), used instead of `link` |
+| `baseUrl` | `string` | Your Solverr app's address with `https://` (`http://` only for `localhost`, `127.0.0.1` and `[::1]`), taken from the nearest `SolverrProvider` when left out |
+| `mode` | `"page"` or `"overlay"` | `"page"` (the default) links to the full checkout page, and `"overlay"` opens the checkout in a popup over your page |
+| `onPaid` | `(invoice) => void` | Popup only, called when the checkout reports payment |
+| `onClose` | `() => void` | Popup only, called after the popup closes |
+| `className` | `string` | Your own button class, which replaces the default blue style |
+| `children` | `ReactNode` | The button label, "Pay with crypto" by default |
+
+If the button is set up wrong (no `baseUrl`, an `http://` address that is not local, or a missing or malformed `link` or `invoice` id), it renders disabled and logs the reason with `console.error` instead of breaking your page.
+
+## Content Security Policy
+
+The component adds one `style` element to the page for the button and popup styles, and the popup loads the checkout in a frame. If your site sends a strict `Content-Security-Policy`, allow inline styles (`style-src 'self' 'unsafe-inline'`) and, for the popup, frames from your Solverr app (`frame-src https://your-solverr-host`).

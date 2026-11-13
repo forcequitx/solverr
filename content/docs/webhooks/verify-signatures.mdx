@@ -1,0 +1,133 @@
+---
+title: Verify signatures
+icon: shield
+description: How Solverr signs webhooks with Standard Webhooks HMAC-SHA256, and how to verify them with solverr-node, plain Node crypto or a Standard Webhooks library.
+---
+
+Anyone can send a `POST` request to your webhook URL, so trust an event only when its signature is valid. A valid signature shows that Solverr sent the event and nobody changed it. Solverr signs events the [Standard Webhooks](https://www.standardwebhooks.com) way. Check them with `solverr-node` (or the Solverr PHP and Python SDKs), with any Standard Webhooks library, or with plain Node crypto.
+
+## How the signature is made
+
+1. Solverr sends the event `id` as `webhook-id` and the current Unix time in seconds, for example `1762344221`, as `webhook-timestamp`.
+2. It joins the id, the timestamp and the raw request body with dots into one string, such as `evt_….1762344221.{"id":"evt_…",…}`.
+3. It computes the HMAC-SHA256 of that string. The key is your webhook signing secret without its `whsec_` prefix, decoded from base64.
+4. It sends `v1,` followed by the base64 result in `webhook-signature`. While a rotated secret is still valid, a second `v1,` signature made with the old secret follows after a space.
+
+To verify an event, repeat steps 2 and 3 with the body exactly as it arrived. Accept the event when your result equals any `v1,` entry, compared in constant time. Also reject events whose timestamp is too old; five minutes (300 seconds) is a good limit.
+
+<Callout type="warn">
+Sign the raw body bytes. If your framework parses the JSON first, re-serializing it changes spacing or key order, and the signature no longer matches.
+</Callout>
+
+## Verify with solverr-node
+
+`webhooks.verify` does all of this and returns the parsed event. The `new Webhooks()` instance needs no API key. `verify` throws `WebhookVerificationError` when the signature, timestamp or body is wrong, and rejects timestamps more than 300 seconds from now. Change that window with `{ toleranceSeconds }`.
+
+Keep the signing secret in `SOLVERR_WEBHOOK_SECRET` on the server that receives events, and pass it to `verify` as in the examples below.
+
+### Express
+
+```ts
+import express from "express";
+import { Webhooks, WebhookVerificationError } from "solverr-node";
+
+const webhooks = new Webhooks();
+const app = express();
+
+app.post("/webhooks/solverr", express.raw({ type: "application/json" }), (req, res) => {
+  let event;
+  try {
+    event = webhooks.verify(req.body, req.headers, process.env.SOLVERR_WEBHOOK_SECRET!);
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) return res.status(400).send(error.message);
+    throw error;
+  }
+
+  if (event.type === "invoice.paid") {
+    markOrderPaid(event.data.invoice.order_id);
+  }
+  res.sendStatus(200);
+});
+```
+
+### Next.js route handler
+
+```ts
+// app/webhooks/solverr/route.ts
+import { Webhooks, WebhookVerificationError } from "solverr-node";
+
+const webhooks = new Webhooks();
+
+export async function POST(request: Request) {
+  const body = await request.text();
+  let event;
+  try {
+    event = webhooks.verify(body, request.headers, process.env.SOLVERR_WEBHOOK_SECRET!);
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) return new Response(error.message, { status: 400 });
+    throw error;
+  }
+
+  if (event.type === "invoice.paid") {
+    await markOrderPaid(event.data.invoice.order_id);
+  }
+  return new Response(null, { status: 200 });
+}
+```
+
+## Verify with plain Node crypto
+
+Without the SDK, the built-in `node:crypto` module does the same checks:
+
+```ts
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+const TOLERANCE_SECONDS = 300;
+
+/** Returns the parsed event, or throws when the webhook is not genuine. */
+export function verifySolverrWebhook(rawBody: string, headers: Headers, secret: string) {
+  const id = headers.get("webhook-id");
+  const timestamp = headers.get("webhook-timestamp");
+  const signatures = headers.get("webhook-signature");
+  if (!id || !timestamp || !signatures || !/^\d+$/.test(timestamp)) throw new Error("Missing or malformed webhook headers.");
+
+  const key = Buffer.from(secret.slice("whsec_".length), "base64");
+  const expected = createHmac("sha256", key).update(`${id}.${timestamp}.${rawBody}`).digest();
+  const valid = signatures
+    .split(" ")
+    .filter((entry) => entry.startsWith("v1,"))
+    .map((entry) => Buffer.from(entry.slice(3), "base64"))
+    .some((received) => received.length === expected.length && timingSafeEqual(expected, received));
+  if (!valid) throw new Error("Signature does not match.");
+
+  const age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+  if (age > TOLERANCE_SECONDS) throw new Error("Timestamp is too old.");
+
+  return JSON.parse(rawBody);
+}
+
+// In a route handler:
+// const event = verifySolverrWebhook(await request.text(), request.headers, process.env.SOLVERR_WEBHOOK_SECRET!);
+```
+
+Header names are case-insensitive: `webhook-signature` and `Webhook-Signature` are the same header.
+
+## Verify with a Standard Webhooks library
+
+The open-source [Standard Webhooks libraries](https://github.com/standard-webhooks/standard-webhooks/tree/main/libraries), including JavaScript, Python, PHP, Go, Ruby, Java and Rust, take your `whsec_` secret as it is:
+
+```ts
+import { Webhook } from "standardwebhooks";
+
+const event = new Webhook(process.env.SOLVERR_WEBHOOK_SECRET!).verify(await request.text(), Object.fromEntries(request.headers));
+```
+
+## Rotate the signing secret
+
+Only the owner can rotate the signing secret, for example when it may have leaked.
+
+1. In **Dashboard → Developers**, on the **Webhook** card, select **Rotate signing secret**.
+2. Select **Rotate it** to confirm.
+3. Copy the new secret, which Solverr shows only once, and update your server within 24 hours.
+
+For 24 hours after a rotation, every event carries two `v1,` signatures: one made with the new secret and one with the old. Your server keeps verifying events while you switch. After that, only the new secret signs.

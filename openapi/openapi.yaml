@@ -1,0 +1,2606 @@
+openapi: 3.1.0
+info:
+  title: Solverr API
+  version: "0.1.0"
+  description: |
+    The Solverr REST API creates invoices, payment links, refunds, payouts, subscriptions and agent credits.
+
+    Business endpoints need a live API key in the `Authorization` header: `Bearer sk_live_...`. Create one in the dashboard under Developers. A key sees only the objects of its own business.
+
+    To try a payment without moving real money, use the public demo store at `/demo`. Its invoices are the only ones in test mode.
+
+    Checkout endpoints have no authentication. The hosted checkout page, the embed script and AI agents call them with an invoice id.
+
+    Amounts are decimal strings. Errors use one shape: an `error` object with `type`, `message`, `param` for an invalid field, and `code` for the checkout errors listed under `Error`. The one exception is a wrong HTTP method on an existing path, which returns `405` without a body.
+
+    Rate limits "per network" count an IPv6 /48 as one client; for IPv4 the network is the single address.
+servers:
+  - url: /
+    description: This Solverr app, the one serving this API reference.
+  - url: https://{host}
+    description: The address of the Solverr app you use.
+    variables:
+      host:
+        default: your-solverr-host
+        description: Host name of your Solverr app, for example pay.example.com.
+tags:
+  - name: Invoices
+    description: Create, read, list and redeem invoices with an API key.
+  - name: Checkout
+    description: Public endpoints the checkout page and paying agents call. No authentication.
+  - name: Payment links
+    description: Reusable links with a fixed amount, or tip links where the customer chooses the amount.
+  - name: Refunds
+    description: Refunds of paid invoices. The business approves each one from its payout wallet.
+  - name: Payouts
+    description: Transfers from the business's payout wallet to any address. The business approves each one from that wallet.
+  - name: Subscriptions
+    description: Recurring invoices sent to a customer every week or month.
+  - name: Credits
+    description: Prepaid USD balances that AI agents spend per API call.
+  - name: Webhooks
+    description: Send a signed ping event to your webhook URL.
+  - name: Support
+    description: Public help-page endpoints that find a payment and open a support case.
+  - name: Tokens
+    description: Coins the checkout accepts, with USD prices, and the route limits the worker measures.
+
+paths:
+  /api/v1/invoices:
+    post:
+      operationId: createInvoice
+      tags: [Invoices]
+      summary: Create an invoice
+      description: |
+        Creates an invoice and returns its `checkout_url`. Send the customer to that URL to pay.
+
+        The settlement amount (what the business receives) is fixed when the invoice is created. EUR and INR are converted to USD with ECB reference rates; USDC, USDT and DAI count as 1 USD; other settlement coins use the current USD price.
+
+        Rate limit: 1200 per minute per API key, counted separately from other endpoints.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvoiceRequest"
+            example:
+              amount: "25.00"
+              currency: USD
+              order_id: "1042"
+              description: Blue T-shirt
+              redirect_url: https://shop.example/thanks
+      responses:
+        "201":
+          description: The invoice was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+    get:
+      operationId: listInvoices
+      tags: [Invoices]
+      summary: List invoices
+      description: |
+        Lists your invoices, newest first.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - name: status
+          in: query
+          required: false
+          description: Only return invoices with this status.
+          schema:
+            $ref: "#/components/schemas/InvoiceStatus"
+      responses:
+        "200":
+          description: One page of invoices.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}:
+    get:
+      operationId: getInvoice
+      tags: [Invoices]
+      summary: Get an invoice
+      description: |
+        Returns one invoice with its status, flags and receipt URL.
+
+        Rate limit: 1200 per minute per API key, counted separately from other endpoints.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      responses:
+        "200":
+          description: The invoice.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}/redeem:
+    post:
+      operationId: redeemInvoice
+      tags: [Invoices]
+      summary: Redeem a paid invoice
+      description: |
+        Marks a paid invoice as used. It succeeds only once per invoice, so one payment grants access to content or an API call a single time.
+
+        Returns 409 with type `invalid_state` when the invoice is not paid, or `already_redeemed` when it was used before. With an `Idempotency-Key`, a retry after a lost response returns the first result instead of `already_redeemed`.
+
+        Rate limit: 1200 per minute per API key, counted separately from other endpoints.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The invoice is now marked as used.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceRedemption"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}/quote:
+    post:
+      operationId: createQuote
+      tags: [Checkout]
+      summary: Get a deposit address
+      description: |
+        Returns a one-time deposit address and the exact amount to send for the chosen coin. The quote is valid for 20 minutes, or until the invoice expires if that is sooner.
+
+        Asking again for the same coin and refund address returns the open quote instead of a new one. A quote for a different coin or refund address retires the previous unused one; the old address is watched for 24 hours in case a payment still arrives. The invoice needs at least 2 minutes of lifetime left.
+
+        When the business has private payments on, the quote is a NEAR Intents confidential quote and the payment has `confidential: true`. If NEAR Intents refuses it, or this server is not set up for confidential quotes, the answer is a `quote_unavailable` error without `param`; Solverr never falls back to a public payment.
+
+        Rate limits: 120 per minute per IP address and per network, 10 per minute per invoice, 120 new addresses per minute per business, and 10 new addresses per invoice per hour.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuoteRequest"
+            example:
+              origin_asset: nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near
+              refund_address: "0x1111111111111111111111111111111111111111"
+      responses:
+        "201":
+          description: The deposit details for this payment attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/QuoteUnavailable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/invoices/{id}/deposit:
+    post:
+      operationId: reportDeposit
+      tags: [Checkout]
+      summary: Report a transaction hash
+      description: |
+        Reports the transaction hash of a transfer to a deposit address: the payment named by `payment_id`, or the latest one. Solverr passes the hash to NEAR Intents, which then detects the payment sooner. A wallet that returns no hash sends `wallet_sent: true` instead, which only marks the payment as on its way. Returns the current checkout state.
+
+        Rate limits: 20 per minute per IP address, 80 per network and 5 per invoice.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportDepositRequest"
+      responses:
+        "200":
+          description: The checkout state after the report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkout"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/QuoteUnavailable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/invoices/{id}/estimate:
+    post:
+      operationId: estimatePayments
+      tags: [Checkout]
+      summary: Compare payment costs
+      description: |
+        Prices the invoice in up to five coins without creating deposit addresses. The checkout uses it to rank the coins a connected wallet holds, and, without `refund_address`, to check a chosen coin before the customer gives an address. Each entry has either the amount to send or the reason the coin cannot be used; a refused route also carries `minimum_usd` when NEAR Intents names a minimum. When NEAR Intents does not answer, or this server's 1Click request budget is taken by payments, an entry comes back with `ok: false`, `temporary: true` and "The payment network did not answer. Try again." When the business has private payments on and they cannot be quoted, the whole request fails with a `quote_unavailable` error, because no coin can be used.
+
+        Rate limits: 10 per minute per invoice, and 25 coins per minute per IP address and 100 coins per minute per network (each request counts the number of different coins it compares).
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EstimateRequest"
+      responses:
+        "200":
+          description: One estimate per distinct coin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstimateList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/QuoteUnavailable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}/status:
+    get:
+      operationId: getCheckoutStatus
+      tags: [Checkout]
+      summary: Get the checkout status
+      description: |
+        Returns what the public checkout page shows: the invoice status and the payment attempt that paid it or is under way, else the latest one. It contains nothing private to the business. Responses are not cached.
+
+        Rate limits: 600 per minute per IP address and 1200 per network.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      responses:
+        "200":
+          description: The checkout state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkout"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}/events:
+    get:
+      operationId: streamCheckoutEvents
+      tags: [Checkout]
+      summary: Stream checkout updates
+      description: |
+        A Server-Sent Events stream for the checkout page. It sends an event named `change`, with empty data, whenever the checkout status may have changed; fetch `GET /api/v1/invoices/{id}/status` again when it arrives. A comment line arrives every 20 seconds, and the stream ends after 4 minutes so the browser reconnects; `EventSource` does that on its own. The stream can miss a change while it reconnects, so also fetch the status once each time it opens.
+
+        Rate limits: 30 stream starts per IP address, 100 per network and 20 per invoice, per 4 minutes.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      responses:
+        "200":
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: "retry: 3000\n\nevent: change\ndata: \n\n"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Live updates are not available right now; fetch the checkout status on an interval instead.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}/simulate:
+    post:
+      operationId: simulatePayment
+      tags: [Checkout]
+      summary: Simulate a demo store payment
+      description: |
+        Works only on invoices from the public demo store (`/demo`), which are in test mode. Moves the latest payment attempt to the chosen outcome one status every 4 seconds, through the same statuses as a real payment. The invoice needs a deposit address first. Any other invoice returns 404.
+
+        Rate limit: 60 per minute per IP address.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimulateRequest"
+      responses:
+        "204":
+          description: The outcome was recorded.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/invoices/{id}/email:
+    post:
+      operationId: setReceiptEmail
+      tags: [Checkout]
+      summary: Ask for a receipt email
+      description: |
+        Saves the customer's email address so a receipt is sent once the invoice is paid. It only works when the server can send email, and only while the invoice has no email address yet. It never works for demo store (test mode) invoices or for an invoice paid more than 7 days ago; those answer `409 invalid_state`.
+
+        Rate limit: 5 per minute per IP address.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReceiptEmailRequest"
+      responses:
+        "204":
+          description: The email address was saved.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/payment-links:
+    post:
+      operationId: createPaymentLink
+      tags: [Payment links]
+      summary: Create a payment link
+      description: |
+        Creates a reusable payment link. Leave out `amount` to create a tip link where the customer chooses the amount.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentLinkRequest"
+            example:
+              title: Flat white
+              amount: "4.50"
+              currency: EUR
+      responses:
+        "201":
+          description: The payment link was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentLink"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listPaymentLinks
+      tags: [Payment links]
+      summary: List payment links
+      description: |
+        Lists your payment links, newest first.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: One page of payment links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentLinkList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/payment-links/{id}:
+    delete:
+      operationId: deactivatePaymentLink
+      tags: [Payment links]
+      summary: Turn off a payment link
+      description: |
+        Turns the link off. Customers who open it see that it no longer exists; invoices already created from it stay payable.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Payment link id (starts with `lnk_`).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The payment link, now with `active` false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/payment-links/{id}/invoices:
+    post:
+      operationId: createPaymentLinkInvoice
+      tags: [Checkout]
+      summary: Start a payment from a link
+      description: |
+        Creates a new invoice for one visit to a payment link and returns its checkout URL. For a tip link, send the amount the customer chose. For a fixed-amount link, the link's amount is always used: an `amount` you send must still be valid, but its value is ignored.
+
+        Rate limits: 60 per minute per IP address, 240 per network and 600 per link.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Payment link id, starting with `lnk_`.
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PayLinkRequest"
+      responses:
+        "201":
+          description: The invoice to pay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkInvoice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/refunds:
+    post:
+      operationId: createRefund
+      tags: [Refunds]
+      summary: Create a refund
+      description: |
+        Creates a pending refund for a paid invoice. The refund goes to the refund address the customer used, in the coin they paid with. `amount` is in the business's settlement coin and defaults to what is left of that payment.
+
+        Nothing is sent yet: the business opens `sign_url` and approves the transfer from its payout wallet.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRefundRequest"
+      responses:
+        "201":
+          description: The pending refund.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listRefunds
+      tags: [Refunds]
+      summary: List refunds
+      description: |
+        Lists your refunds, newest first.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: One page of refunds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/refunds/{id}:
+    get:
+      operationId: getRefund
+      tags: [Refunds]
+      summary: Get a refund
+      description: |
+        Returns one refund and its current status.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TransferId"
+      responses:
+        "200":
+          description: The refund.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/refunds/{id}/cancel:
+    post:
+      operationId: cancelRefund
+      tags: [Refunds]
+      summary: Cancel a refund
+      description: |
+        Cancels a refund that was not sent. It becomes `canceled`, a `refund.canceled` webhook is sent, and its amount can be refunded again.
+
+        Returns 409 `invalid_state` in three cases:
+        - The refund was already sent or has ended.
+        - The payout wallet already sent coins to the refund's NEAR Intents deposit address; those coins are still delivered.
+        - The refund was prepared in the dashboard and the coins may already have left the wallet. A same-coin refund can then be canceled only in the dashboard; a converted one can be canceled through the API once its deposit address stops accepting coins.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TransferId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The canceled refund.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/payouts:
+    post:
+      operationId: createPayout
+      tags: [Payouts]
+      summary: Create a payout
+      description: |
+        Creates a pending payout to any address. `amount` is in the business's settlement coin; `asset_id` is the coin the recipient receives. When the two coins differ, NEAR Intents swaps them.
+
+        Nothing is sent yet: the business opens `sign_url` and approves the transfer from its payout wallet.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayoutRequest"
+            example:
+              recipient: "0x1111111111111111111111111111111111111111"
+              asset_id: nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near
+              amount: "25.00"
+      responses:
+        "201":
+          description: The pending payout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+    get:
+      operationId: listPayouts
+      tags: [Payouts]
+      summary: List payouts
+      description: |
+        Lists your payouts, newest first.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: One page of payouts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/payouts/{id}:
+    get:
+      operationId: getPayout
+      tags: [Payouts]
+      summary: Get a payout
+      description: |
+        Returns one payout and its current status.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TransferId"
+      responses:
+        "200":
+          description: The payout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/payouts/{id}/cancel:
+    post:
+      operationId: cancelPayout
+      tags: [Payouts]
+      summary: Cancel a payout
+      description: |
+        Cancels a payout that was not sent. It becomes `canceled` and a `payout.canceled` webhook is sent.
+
+        Returns 409 `invalid_state` in three cases:
+        - The payout was already sent or has ended.
+        - The payout wallet already sent coins to the payout's NEAR Intents deposit address; those coins are still delivered.
+        - The payout was prepared in the dashboard and the coins may already have left the wallet. A same-coin payout can then be canceled only in the dashboard; a converted one can be canceled through the API once its deposit address stops accepting coins.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TransferId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The canceled payout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/payouts/batch:
+    post:
+      operationId: createPayoutBatch
+      tags: [Payouts]
+      summary: Create a batch of payouts
+      description: |
+        Creates up to 200 pending payouts that share one `batch_id`. Every row is checked before any payout is created, so one invalid row creates nothing. The business approves each payout from its payout wallet.
+
+        Rate limit: 20 per minute per API key, counted separately from other endpoints.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [payouts]
+              properties:
+                payouts:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    $ref: "#/components/schemas/CreatePayoutRequest"
+      responses:
+        "201":
+          description: The created payouts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, id, data]
+                properties:
+                  object:
+                    type: string
+                    const: payout_batch
+                  id:
+                    type: string
+                    description: Batch id (starts with `bat_`).
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transfer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/subscriptions:
+    post:
+      operationId: createSubscription
+      tags: [Subscriptions]
+      summary: Create a subscription
+      description: |
+        Creates a subscription. The worker creates the first invoice within about a minute and then one every week or month. Each invoice stays payable for 24 hours. When email is configured, the customer receives each invoice by email, up to 10 payment-link emails per address in 24 hours. A business can create at most 500 subscriptions in 24 hours (10 until it receives its first payment) and keep at most 2,000 active ones; past either limit the response is `409 invalid_state`.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionRequest"
+            example:
+              customer_email: ada@example.com
+              amount: "9.00"
+              currency: USD
+              interval: month
+              description: Pro plan
+      responses:
+        "201":
+          description: The subscription was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listSubscriptions
+      tags: [Subscriptions]
+      summary: List subscriptions
+      description: |
+        Lists your subscriptions, newest first.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: One page of subscriptions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/subscriptions/{id}:
+    delete:
+      operationId: cancelSubscription
+      tags: [Subscriptions]
+      summary: Cancel a subscription
+      description: |
+        Cancels the subscription; no further invoices are created. Invoices already sent stay payable.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Subscription id (starts with `sub_`).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The subscription, now with status `canceled`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/credits/topup:
+    post:
+      operationId: topUpCredits
+      tags: [Credits]
+      summary: Top up agent credits
+      description: |
+        Creates a USD invoice that adds its amount to a credit balance once it is paid. Without `credit_account_id`, a new credit account is created and its `token` is returned. The token is shown only in this response, so store it.
+
+        Send `credit_account_id` to top up an existing account; the token is then not returned again.
+
+        Rate limit: 60 per minute per API key, shared with the other endpoints that have this limit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopUpRequest"
+            example:
+              amount: "10.00"
+              currency: USD
+      responses:
+        "201":
+          description: The credit account and the invoice that funds it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditTopUp"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/credits/charge:
+    post:
+      operationId: chargeCredits
+      tags: [Credits]
+      summary: Charge agent credits
+      description: |
+        Deducts an amount in USD from the balance of the credit account that owns `token`. The paywall middleware calls this once per paid request. Returns 409 with type `insufficient_credit` when the balance is too low.
+
+        Rate limit: 600 per minute per API key.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChargeRequest"
+      responses:
+        "200":
+          description: The charge, with the balance after it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditCharge"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/credits/charges/{id}/refund:
+    post:
+      operationId: refundCreditCharge
+      tags: [Credits]
+      summary: Refund a credit charge
+      description: |
+        Gives a charge back to its credit account. The paywall middleware calls this when the request a charge paid for failed (your handler threw or answered 400 or higher). A charge can be refunded once; a second refund returns 409 with type `invalid_state`.
+
+        Rate limit: 600 per minute per API key, counted separately from charges.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The charge id (`cru_…`) returned by the charge.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The refunded charge, with the balance after the refund.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditCharge"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/webhooks/test:
+    post:
+      operationId: sendTestWebhook
+      tags: [Webhooks]
+      summary: Send a ping event
+      description: |
+        Queues a signed `test.ping` event to your business's webhook URL, saved in the dashboard. Its `data.message` is "This is a ping event from Solverr." Returns 409 with the message "Set a webhook URL in the dashboard first." when no webhook URL is set, and 409 with a message saying webhooks are off when the endpoint answered `410 Gone` and its URL was not saved again. The worker looks for due events every 5 seconds. With an `Idempotency-Key`, a retry returns the first result instead of queuing a second ping.
+
+        Rate limit: 10 per minute per business.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: The ping event was queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued]
+                properties:
+                  queued:
+                    type: boolean
+                    const: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/support-cases:
+    post:
+      operationId: createSupportCase
+      tags: [Support]
+      summary: Open a support case
+      description: |
+        Opens a support case for a payment problem and returns a ready-to-send report for NEAR Intents support. When the payment belongs to an invoice, the business gets a dashboard alert and a `support_case.created` webhook while it has at most 30 support cases from the last 24 hours, counting this case and the cases Solverr opens by itself when a swap fails. Cases past that number appear only on the dashboard's Support page.
+
+        If the transaction was reported on a different chain from the quote, the case kind becomes `wrong_chain`. If no invoice matches, it becomes `not_found`. Reporting the same transaction for the same invoice again returns the open case.
+
+        Rate limits: 5 per minute per IP address, 20 per minute per network, and 5 cases per invoice per 24 hours, counting the ones Solverr opens when a swap fails. The `429` for too many cases on one invoice also carries `Retry-After`, the seconds until the oldest of them is 24 hours old.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSupportCaseRequest"
+      responses:
+        "201":
+          description: The support case.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/support-cases/lookup:
+    get:
+      operationId: lookupPayment
+      tags: [Support]
+      summary: Find a payment
+      description: |
+        Finds a payment by invoice id or by the transaction hash the customer sent. Send at least one of the two. A match by invoice id returns the checkout state; a match by transaction hash alone returns only the status, because transaction hashes are public.
+
+        Rate limit: 30 per minute per IP address.
+      security: []
+      parameters:
+        - name: invoice_id
+          in: query
+          required: false
+          description: Invoice id, starting with `inv_`.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 60
+        - name: tx_hash
+          in: query
+          required: false
+          description: Transaction hash of the customer's transfer.
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 200
+            pattern: ^[A-Za-z0-9:_\-.]+$
+      responses:
+        "200":
+          description: The matching payment.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Checkout"
+                  - $ref: "#/components/schemas/PaymentLookup"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/tokens:
+    get:
+      operationId: listTokens
+      tags: [Tokens]
+      summary: List supported coins
+      description: |
+        Lists the coins the checkout accepts, with USD prices. Coins on chains the checkout does not support are left out. The list is cached for 60 seconds.
+
+        Rate limit: 120 per minute per IP address.
+      security: []
+      responses:
+        "200":
+          description: The coin list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenList"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamUnavailable"
+
+  /api/v1/logos/{id}:
+    get:
+      operationId: getLogo
+      tags: [Checkout]
+      summary: Get a business logo
+      description: |
+        Returns a business logo as a WebP image; `Checkout.merchant.logo_url` points here. Every upload gets a new id, so the image behind an id never changes and responses are cacheable for a year.
+
+        Rate limit: 300 per minute per IP address.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            examples: [logo_7h3K9dWq2LmN4pRt6vXy]
+      responses:
+        "200":
+          description: The logo.
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/route-limits:
+    get:
+      operationId: listRouteLimits
+      tags: [Tokens]
+      summary: List route limits
+      description: |
+        Lists what NEAR Intents accepts on each route from a coin a customer can pay with into a coin businesses receive. NEAR Intents does not publish its limits, so the Solverr worker measures every route with dry quotes: at $1, then at the minimum NEAR Intents names, or at $10 and $100 when it reports no liquidity. The worker measures each route every 30 minutes; `checked_at` says when. The checkout still checks a coin live before it takes a payment.
+
+        Only settlement coins that a business uses are measured. Rows not checked for a day are removed.
+
+        Rate limit: 60 per minute per IP address.
+      security: []
+      parameters:
+        - name: destination_asset
+          in: query
+          required: false
+          description: Only routes into this settlement coin.
+          schema:
+            type: string
+        - name: origin_asset
+          in: query
+          required: false
+          description: Only routes paid with this coin.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The route answers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RouteLimitList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A live API key, `sk_live_` followed by 32 base58 characters.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        A unique string of 1 to 255 characters for this operation. A key belongs to the business across every endpoint for 24 hours, so give each operation its own key, for example `invoice-order-1042` and `refund-order-1042`, not the order id alone. A retry with the same key on the same endpoint and with the same body returns the stored response with the header `Idempotent-Replayed: true`. The same key with a different body or on another endpoint returns 409 `idempotency_conflict`. Errors are not stored, so a request that failed can be retried with the same key, even with a corrected body. While the first request with a key is still running, a retry gets 409 `idempotency_conflict` with `Retry-After: 1`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Number of items per page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    StartingAfter:
+      name: starting_after
+      in: query
+      required: false
+      description: Id of the last item of the previous page. Returns the items after it.
+      schema:
+        type: string
+        minLength: 1
+    InvoiceId:
+      name: id
+      in: path
+      required: true
+      description: Invoice id, starting with `inv_`.
+      schema:
+        type: string
+    TransferId:
+      name: id
+      in: path
+      required: true
+      description: Refund id (starting with `ref_`) or payout id (starting with `pay_`).
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: The request is not valid. `param` names the field when one is wrong. Type `invalid_request`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: invalid_request
+              message: amount must be a decimal string with up to 2 decimals, such as "25.00".
+              param: amount
+    Unauthorized:
+      description: The API key is missing, malformed or revoked. Type `authentication_failed`.
+      headers:
+        WWW-Authenticate:
+          description: Always `Bearer`, the scheme the API key is sent with.
+          schema:
+            type: string
+            const: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: authentication_failed
+              message: This API key is not valid or was revoked. Create a new key in Dashboard → Developers.
+    NotFound:
+      description: No object with this id exists, or it belongs to another business. Type `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: not_found
+              message: No invoice with this id.
+              param: id
+    Conflict:
+      description: The object is not in a state that allows this action. Types `invalid_state`, `already_redeemed`, `insufficient_credit` or `idempotency_conflict`.
+      headers:
+        Retry-After:
+          description: Seconds until you may retry; sent with `idempotency_conflict` while the first request with the same key is still running.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: invalid_state
+              message: This invoice is already paid.
+    IdempotencyConflict:
+      description: The `Idempotency-Key` was already used with a different request, or the first request with it is still running. Type `idempotency_conflict`.
+      headers:
+        Retry-After:
+          description: Seconds until you may retry; sent only while the first request with the same key is still running.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: idempotency_conflict
+              message: This Idempotency-Key was already used with a different request.
+              param: Idempotency-Key
+    QuoteUnavailable:
+      description: NEAR Intents cannot use this coin or transaction right now. Type `quote_unavailable`. The message says what the customer can do instead. Without `param`, the business's private payments cannot be quoted right now, whatever the coin.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: quote_unavailable
+              message: USDT on TRON needs a payment of at least $X right now. Pay with USDC on Base, or choose another coin.
+              param: origin_asset
+    RateLimited:
+      description: Too many requests. Type `rate_limited`. Wait the number of seconds in `Retry-After` and try again.
+      headers:
+        Retry-After:
+          description: Seconds until you may retry.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: rate_limited
+              message: Too many requests. Try again in 12 seconds.
+    UpstreamUnavailable:
+      description: NEAR Intents or the currency rate service did not respond. Type `upstream_unavailable`. Retry with backoff.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: upstream_unavailable
+              message: The payment network is not responding. Try again shortly.
+    InternalError:
+      description: An unexpected server error. Type `internal_error`. Retry with backoff.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              type: internal_error
+              message: Something went wrong. Try again shortly.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              enum:
+                - invalid_request
+                - authentication_failed
+                - not_found
+                - invalid_state
+                - already_redeemed
+                - insufficient_credit
+                - quote_unavailable
+                - idempotency_conflict
+                - rate_limited
+                - upstream_unavailable
+                - internal_error
+            code:
+              type: string
+              enum: [invoice_paid, invoice_expired, payment_in_progress, payout_changed, too_many_attempts]
+              description: A finer reason, so a client can show its own text. Some `invalid_state` errors from the checkout endpoints carry `invoice_paid`, `invoice_expired` or `payment_in_progress`, or `payout_changed` when the business moved its payout wallet to another network after the invoice was created (no coin can pay it; ask the business for a new invoice), and the `429` for an invoice that reached its 10 new deposit addresses in an hour carries `too_many_attempts` (its `Retry-After` can be up to an hour). The `429` for a payment that already has 5 support cases from the last 24 hours also carries `too_many_attempts`, with a `Retry-After` of up to a day.
+            message:
+              type: string
+              description: A sentence that explains the problem.
+            param:
+              type: string
+              description: The request field or header that caused the error, when there is one.
+
+    Mode:
+      type: string
+      enum: [live, test]
+      description: Always `live` on the objects your API key creates and reads. Only demo store invoices, seen through the public checkout endpoints, are `test`.
+
+    Currency:
+      type: string
+      enum: [USD, EUR, INR]
+
+    InvoiceStatus:
+      type: string
+      enum: [created, awaiting_payment, detected, processing, paid, underpaid, refunded, failed, expired]
+
+    Amount:
+      type: string
+      description: Decimal string with up to 2 decimals, greater than 0.
+      pattern: ^\d{1,12}(\.\d{1,2})?$
+      examples: ["25.00"]
+
+    Metadata:
+      type: object
+      description: Up to 20 keys of your own. Keys are at most 40 characters and values at most 500.
+      maxProperties: 20
+      propertyNames:
+        maxLength: 40
+      additionalProperties:
+        type: string
+        maxLength: 500
+
+    CreateInvoiceRequest:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          $ref: "#/components/schemas/Amount"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        order_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Your own order reference.
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Your own note about what the invoice is for. Your dashboard and Telegram messages show it; the hosted checkout page does not.
+        redirect_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: An http or https URL the customer returns to after paying.
+        customer_email:
+          type: string
+          format: email
+          description: Where the receipt is sent when email is configured. Without it, the customer can enter one on the checkout page.
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+        expires_in:
+          type: integer
+          minimum: 900
+          maximum: 86400
+          default: 3600
+          description: Invoice lifetime in seconds, from 15 minutes to 24 hours.
+
+    Settlement:
+      type: object
+      description: The coin and amount the business receives.
+      required: [asset_id, symbol, blockchain, amount, amount_base]
+      properties:
+        asset_id:
+          type: string
+          description: NEAR Intents asset id of the settlement coin.
+        symbol:
+          type: string
+        blockchain:
+          type: string
+          description: Chain code, such as `base`.
+        amount:
+          type: string
+          description: Decimal amount in the settlement coin.
+        amount_base:
+          type: string
+          description: Integer amount in the coin's smallest unit.
+
+    Invoice:
+      type: object
+      required:
+        - id
+        - object
+        - mode
+        - status
+        - amount
+        - currency
+        - order_id
+        - description
+        - customer_email
+        - redirect_url
+        - metadata
+        - settlement
+        - late
+        - extra_payment
+        - checkout_url
+        - receipt_url
+        - redeemed_at
+        - expires_at
+        - created_at
+      properties:
+        id:
+          type: string
+          examples: [inv_7h3K9dWq2LmN4pRt6vXy]
+        object:
+          type: string
+          const: invoice
+        mode:
+          $ref: "#/components/schemas/Mode"
+        status:
+          $ref: "#/components/schemas/InvoiceStatus"
+        amount:
+          type: string
+          description: Decimal string with 2 decimals.
+        currency:
+          $ref: "#/components/schemas/Currency"
+        order_id:
+          type: [string, "null"]
+        description:
+          type: [string, "null"]
+        customer_email:
+          type: [string, "null"]
+          description: Where the receipt is sent. When you created the invoice without one, anyone with the checkout link can enter it on the checkout page, so it is not a verified identity of the customer.
+        redirect_url:
+          type: [string, "null"]
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        settlement:
+          $ref: "#/components/schemas/Settlement"
+        late:
+          type: boolean
+          description: True when the payment arrived on a deposit address that was already replaced or expired.
+        extra_payment:
+          type: boolean
+          description: True when a second payment also succeeded for this invoice.
+        checkout_url:
+          type: string
+          format: uri
+          description: The hosted checkout page for this invoice.
+          example: https://your-solverr-host/pay/inv_7h3K9dWq2LmN4pRt6vXy
+        receipt_url:
+          type: [string, "null"]
+          format: uri
+          description: The public receipt page, once the invoice is paid.
+          example: https://your-solverr-host/receipt/inv_7h3K9dWq2LmN4pRt6vXy
+        redeemed_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the payment was used with `POST /api/v1/invoices/{id}/redeem`; a used payment cannot be redeemed again.
+          example: "2026-11-05T12:03:10.000Z"
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    InvoiceList:
+      type: object
+      required: [object, data, has_more]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invoice"
+        has_more:
+          type: boolean
+
+    InvoiceRedemption:
+      type: object
+      required: [id, redeemed_at, payment]
+      properties:
+        id:
+          type: string
+        redeemed_at:
+          type: string
+          format: date-time
+        payment:
+          description: The payment that paid the invoice.
+          oneOf:
+            - $ref: "#/components/schemas/Payment"
+            - type: "null"
+
+    PaymentLookup:
+      type: object
+      description: The status of a payment found by transaction hash alone.
+      required: [object, status]
+      properties:
+        object:
+          type: string
+          enum: [payment_lookup]
+        status:
+          $ref: "#/components/schemas/InvoiceStatus"
+
+    CreateQuoteRequest:
+      type: object
+      additionalProperties: false
+      required: [origin_asset, refund_address]
+      properties:
+        origin_asset:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Asset id of the coin the payer sends, from the tokens list.
+        refund_address:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The payer's own address on the coin's chain. Refunds go here. It is checked against the chain's address format.
+
+    PaymentCoin:
+      type: object
+      required: [asset_id, symbol, blockchain, chain_name, decimals]
+      properties:
+        asset_id:
+          type: string
+        symbol:
+          type: string
+        blockchain:
+          type: string
+        chain_name:
+          type: string
+        decimals:
+          type: integer
+
+    Transaction:
+      type: object
+      required: [hash, url]
+      properties:
+        hash:
+          type: string
+        url:
+          type: [string, "null"]
+          description: Block explorer link, when one is known.
+
+    PaymentStatus:
+      type: string
+      description: The NEAR Intents status of this attempt, in lowercase.
+      enum: [pending_deposit, known_deposit_tx, incomplete_deposit, processing, success, refunded, failed]
+
+    Payment:
+      type: object
+      description: One payment attempt on an invoice, with its deposit address and latest status.
+      required:
+        - id
+        - object
+        - status
+        - coin
+        - amount_in
+        - amount_in_base
+        - min_amount_in_base
+        - amount_in_usd
+        - deposit_address
+        - deposit_memo
+        - refund_address
+        - confidential
+        - deadline
+        - time_estimate_seconds
+        - deposited_amount
+        - refunded_amount
+        - refund_fee
+        - refund_reason
+        - origin_transactions
+        - destination_transactions
+        - correlation_id
+        - quote_signature
+        - created_at
+      properties:
+        id:
+          type: string
+          examples: [quo_4kT9mW2xQpL7vN3rB8sZ]
+        object:
+          type: string
+          const: payment
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        coin:
+          $ref: "#/components/schemas/PaymentCoin"
+        amount_in:
+          type: string
+          description: The exact amount to send, as a decimal string.
+        amount_in_base:
+          type: string
+          description: The same amount in the coin's smallest unit.
+        min_amount_in_base:
+          type: string
+          description: Below this amount the payment is refunded.
+        amount_in_usd:
+          type: [string, "null"]
+        deposit_address:
+          type: string
+          description: One-time address for this attempt only. Demo store invoices get addresses that start with `TEST-`, which cannot receive funds.
+        deposit_memo:
+          type: [string, "null"]
+          description: A memo that must be included with the transfer, when present.
+        refund_address:
+          type: string
+        confidential:
+          type: boolean
+          description: True when NEAR Intents quoted this attempt as a confidential intent (private payments). The public checkout state then leaves out `destination_transactions`, so the payment cannot be linked to the payout.
+        deadline:
+          type: string
+          format: date-time
+          description: Send before this time.
+        time_estimate_seconds:
+          type: integer
+        deposited_amount:
+          type: [string, "null"]
+        refunded_amount:
+          type: [string, "null"]
+        refund_fee:
+          type: [string, "null"]
+          description: Fee NEAR Intents kept when it returned the payment, in the payment's coin. Set only for refunded payments.
+        refund_reason:
+          type: [string, "null"]
+        origin_transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+        destination_transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+        correlation_id:
+          type: string
+          description: NEAR Intents reference for support.
+        quote_signature:
+          type: string
+          description: NEAR Intents signature of the quote, kept as proof of the terms.
+        created_at:
+          type: string
+          format: date-time
+
+    CheckoutPayment:
+      allOf:
+        - $ref: "#/components/schemas/Payment"
+        - type: object
+          required: [state, reported]
+          properties:
+            state:
+              type: string
+              enum: [active, retired, final]
+              description: "`active` is the current address, `retired` was replaced or expired and is still watched for 24 hours, `final` reached an end status."
+            reported:
+              type: boolean
+              description: True when a transaction to this address was reported with `POST /api/v1/invoices/{id}/deposit` and NEAR Intents has not seen it yet. Do not offer the address for another payment while it is true.
+
+    Checkout:
+      type: object
+      description: The public view of an invoice used by the checkout page.
+      required:
+        - id
+        - object
+        - mode
+        - status
+        - merchant
+        - amount
+        - currency
+        - order_id
+        - settlement
+        - late
+        - extra_payment
+        - expires_at
+        - paid_at
+        - retry_allowed
+        - redirect_url
+        - payment
+        - payments_delayed
+        - email_receipts
+        - receipt_email_set
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: checkout
+        mode:
+          $ref: "#/components/schemas/Mode"
+        status:
+          $ref: "#/components/schemas/InvoiceStatus"
+        merchant:
+          type: object
+          required: [name, logo_url]
+          properties:
+            name:
+              type: string
+            logo_url:
+              type: [string, "null"]
+              description: Path of the business logo (a WebP image) on this Solverr host, or null when the business has not uploaded one.
+              example: /api/v1/logos/logo_7h3K9dWq2LmN4pRt6vXy
+        amount:
+          type: string
+        currency:
+          $ref: "#/components/schemas/Currency"
+        order_id:
+          type: [string, "null"]
+        settlement:
+          type: object
+          required: [symbol, blockchain, amount]
+          properties:
+            symbol:
+              type: string
+            blockchain:
+              type: string
+            amount:
+              type: string
+        late:
+          type: boolean
+        extra_payment:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+        paid_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the invoice was paid, or null before that.
+        retry_allowed:
+          type: boolean
+          description: True when the invoice can take a new payment attempt (status `created`, `awaiting_payment`, `refunded` or `failed`) and more than 2 minutes of its lifetime are left.
+        redirect_url:
+          type: [string, "null"]
+          description: Set only once the invoice is paid.
+        payment:
+          oneOf:
+            - $ref: "#/components/schemas/CheckoutPayment"
+            - type: "null"
+          description: The payment attempt that paid the invoice, else one whose payment is in flight, else the newest; null before a coin is chosen.
+        payments_delayed:
+          type: boolean
+          description: True when the worker's NEAR Intents health check is failing. Always false for demo store invoices.
+        email_receipts:
+          type: boolean
+          description: True when the server can send receipt emails. Always false for demo store (test mode) invoices, and once the invoice was paid more than 7 days ago.
+        receipt_email_set:
+          type: boolean
+
+    ReportDepositRequest:
+      type: object
+      additionalProperties: false
+      description: Send exactly one of `tx_hash` and `wallet_sent`.
+      properties:
+        tx_hash:
+          type: string
+          minLength: 8
+          maxLength: 200
+          pattern: ^[A-Za-z0-9:_\-.]+$
+        wallet_sent:
+          type: boolean
+          const: true
+          description: For a wallet that sends without returning a transaction hash (TON). Solverr records the payment as on its way, so `payment.reported` turns true and the address is not offered again; nothing is passed to NEAR Intents.
+        payment_id:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: The payment (deposit address) the transaction was sent to. Leave it out to use the latest one.
+
+    EstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [origin_assets]
+      properties:
+        origin_assets:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            type: string
+            minLength: 1
+            maxLength: 200
+        refund_address:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The payer's address on each coin's chain. Leave it out to check whether the coins can pay and what they cost before the payer gives an address.
+
+    Estimate:
+      oneOf:
+        - type: object
+          required: [asset_id, ok, amount_in, amount_in_base, amount_in_usd]
+          properties:
+            asset_id:
+              type: string
+            ok:
+              type: boolean
+              const: true
+            amount_in:
+              type: string
+            amount_in_base:
+              type: string
+            amount_in_usd:
+              type: [string, "null"]
+        - type: object
+          required: [asset_id, ok, reason]
+          properties:
+            asset_id:
+              type: string
+            ok:
+              type: boolean
+              const: false
+            reason:
+              type: string
+              description: Why this coin cannot be used right now.
+            minimum_usd:
+              type: string
+              description: The smallest payment in US dollars that NEAR Intents currently accepts for this route, when it names one, for example `"1000"`.
+            temporary:
+              type: boolean
+              const: true
+              description: Present when the estimate could not reach NEAR Intents; the coin can work on a later try.
+
+    EstimateList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Estimate"
+
+    SimulateRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [paid, underpaid, refunded, failed]
+
+    ReceiptEmailRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 200
+
+    CreatePaymentLinkRequest:
+      type: object
+      additionalProperties: false
+      required: [title, currency]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Names the link and its payments in your dashboard. The payment link and checkout pages do not show it.
+        amount:
+          $ref: "#/components/schemas/Amount"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        redirect_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: An http or https URL the checkout sends the customer to after paying. Leave it out to use your business website.
+
+    PaymentLink:
+      type: object
+      required: [id, object, mode, url, title, amount, currency, redirect_url, active, created_at]
+      properties:
+        id:
+          type: string
+          examples: [lnk_8Fq2xT4mW9pL3vN7rB2s]
+        object:
+          type: string
+          const: payment_link
+        mode:
+          $ref: "#/components/schemas/Mode"
+        url:
+          type: string
+          format: uri
+          description: The shareable link.
+          example: https://your-solverr-host/l/lnk_8Fq2xT4mW9pL3vN7rB2s
+        title:
+          type: string
+        amount:
+          type: [string, "null"]
+          description: Fixed amount, or null for a tip link.
+        currency:
+          $ref: "#/components/schemas/Currency"
+        redirect_url:
+          type: [string, "null"]
+          format: uri
+          description: Where the checkout sends the customer after paying. When null, the customer goes to your business website, if you set one.
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    PaymentLinkList:
+      type: object
+      required: [object, data, has_more]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentLink"
+        has_more:
+          type: boolean
+
+    PayLinkRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        amount:
+          $ref: "#/components/schemas/Amount"
+
+    LinkInvoice:
+      type: object
+      required: [id, status, checkout_url]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: "#/components/schemas/InvoiceStatus"
+        checkout_url:
+          type: string
+          format: uri
+          example: https://your-solverr-host/pay/inv_7h3K9dWq2LmN4pRt6vXy
+
+    TransferAmount:
+      type: string
+      description: Decimal string in the business's settlement coin, greater than 0.
+      pattern: ^\d{1,12}(\.\d{1,18})?$
+
+    CreateRefundRequest:
+      type: object
+      additionalProperties: false
+      required: [invoice_id]
+      properties:
+        invoice_id:
+          type: string
+          minLength: 1
+        payment_id:
+          type: string
+          minLength: 1
+          description: Completed payment on the invoice to refund. Defaults to the payment that paid the invoice; set it to refund an extra payment, such as a second deposit.
+        amount:
+          $ref: "#/components/schemas/TransferAmount"
+
+    CreatePayoutRequest:
+      type: object
+      additionalProperties: false
+      required: [recipient, asset_id, amount]
+      properties:
+        recipient:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Address that receives the payout. It is checked against the format of the coin's chain.
+        asset_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Asset id of the coin the recipient receives, from the tokens list.
+        amount:
+          $ref: "#/components/schemas/TransferAmount"
+
+    Transfer:
+      type: object
+      description: A refund or a payout. Money leaves the business's payout wallet only after the business approves it at `sign_url`.
+      required:
+        - id
+        - object
+        - status
+        - invoice_id
+        - batch_id
+        - amount
+        - source_asset
+        - asset_id
+        - recipient
+        - tx_hash
+        - failure_reason
+        - sign_url
+        - created_at
+      properties:
+        id:
+          type: string
+          description: Starts with `ref_` for refunds and `pay_` for payouts.
+        object:
+          type: string
+          enum: [refund, payout]
+        status:
+          type: string
+          enum: [pending, processing, completed, failed, canceled]
+        invoice_id:
+          type: [string, "null"]
+        batch_id:
+          type: [string, "null"]
+          description: Set for payouts created together, from a CSV in the dashboard or with `POST /api/v1/payouts/batch`.
+        amount:
+          type: string
+          description: Amount of the business's settlement coin to send.
+        source_asset:
+          type: string
+          description: The business's settlement coin.
+        asset_id:
+          type: string
+          description: The coin the recipient receives.
+        recipient:
+          type: string
+        tx_hash:
+          type: [string, "null"]
+        failure_reason:
+          type: [string, "null"]
+        sign_url:
+          type: string
+          format: uri
+          description: Dashboard page where the business approves the transfer from its payout wallet.
+        created_at:
+          type: string
+          format: date-time
+
+    TransferList:
+      type: object
+      required: [object, data, has_more]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transfer"
+        has_more:
+          type: boolean
+
+    CreateSubscriptionRequest:
+      type: object
+      additionalProperties: false
+      required: [customer_email, amount, currency, interval]
+      properties:
+        customer_email:
+          type: string
+          format: email
+        amount:
+          $ref: "#/components/schemas/Amount"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        interval:
+          type: string
+          enum: [week, month]
+        description:
+          type: string
+          maxLength: 200
+
+    Subscription:
+      type: object
+      required: [id, object, status, customer_email, amount, currency, interval, description, next_invoice_at, created_at]
+      properties:
+        id:
+          type: string
+          examples: [sub_2mQ8vT4kW9xL3pN7rB5s]
+        object:
+          type: string
+          const: subscription
+        status:
+          type: string
+          enum: [active, canceled]
+        customer_email:
+          type: string
+        amount:
+          type: string
+        currency:
+          $ref: "#/components/schemas/Currency"
+        interval:
+          type: string
+          enum: [week, month]
+        description:
+          type: [string, "null"]
+        next_invoice_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    SubscriptionList:
+      type: object
+      required: [object, data, has_more]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Subscription"
+        has_more:
+          type: boolean
+
+    TopUpRequest:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: Decimal string with up to 2 decimals, greater than 0.
+          pattern: ^\d{1,9}(\.\d{1,2})?$
+        currency:
+          type: string
+          const: USD
+          description: Credits are kept in USD.
+        credit_account_id:
+          type: string
+          minLength: 1
+          description: Top up this existing account instead of creating a new one.
+
+    ChargeRequest:
+      type: object
+      additionalProperties: false
+      required: [token, amount]
+      properties:
+        token:
+          type: string
+          pattern: ^solverr_credit_[1-9A-HJ-NP-Za-km-z]{32}$
+          description: The agent's credit token.
+        amount:
+          type: string
+          description: Decimal string with up to 6 decimals, greater than 0.
+          pattern: ^\d{1,9}(\.\d{1,6})?$
+        currency:
+          type: string
+          const: USD
+          description: Optional. Any other value is refused, because balances are in USD.
+        description:
+          type: string
+          maxLength: 200
+
+    CreditAccount:
+      type: object
+      required: [id, object, balance, currency]
+      properties:
+        id:
+          type: string
+          examples: [cra_9pL3vN7rB2sT4mW8xQ5k]
+        object:
+          type: string
+          const: credit_account
+        token:
+          type: string
+          description: Returned only when a new account is created. Store it like a password.
+        balance:
+          type: string
+          description: Balance in USD with 6 decimals.
+        currency:
+          type: string
+          const: USD
+
+    CreditTopUp:
+      type: object
+      required: [credit_account, invoice]
+      properties:
+        credit_account:
+          $ref: "#/components/schemas/CreditAccount"
+        invoice:
+          $ref: "#/components/schemas/Invoice"
+
+    CreditCharge:
+      type: object
+      required: [id, object, amount, balance, currency]
+      properties:
+        id:
+          type: string
+          description: Charge id, starting with `cru_`; pass it to the refund endpoint to give the charge back.
+        object:
+          type: string
+          const: credit_charge
+        amount:
+          type: string
+          description: Amount charged in USD with 6 decimals.
+        refunded:
+          type: boolean
+          description: Present and `true` on the refund endpoint's answer.
+        balance:
+          type: string
+          description: Balance in USD with 6 decimals after this charge or refund.
+        currency:
+          type: string
+          const: USD
+
+    SupportCaseKind:
+      type: string
+      description: "`swap_failed` cases are opened by Solverr when NEAR Intents could not complete a swap; they cannot be reported."
+      enum: [wrong_chain, wrong_coin, missing_memo, stuck, swap_failed, not_found]
+
+    ReportableSupportCaseKind:
+      type: string
+      enum: [wrong_chain, wrong_coin, missing_memo, stuck, not_found]
+
+    CreateSupportCaseRequest:
+      type: object
+      additionalProperties: false
+      required: [tx_hash, chain, kind]
+      properties:
+        invoice_id:
+          type: string
+          minLength: 1
+          maxLength: 60
+        tx_hash:
+          type: string
+          minLength: 8
+          maxLength: 200
+          pattern: ^[A-Za-z0-9:_\-.]+$
+          description: The transaction hash of the customer's transfer.
+        chain:
+          type: string
+          minLength: 1
+          maxLength: 30
+          pattern: ^[a-z0-9_-]{1,30}$
+          description: Chain code the customer actually sent on, such as `tron`.
+        kind:
+          $ref: "#/components/schemas/ReportableSupportCaseKind"
+        details:
+          type: string
+          maxLength: 1000
+
+    SupportCase:
+      type: object
+      required: [id, kind, report_text, support_url]
+      properties:
+        id:
+          type: string
+          examples: [case_3vN7rB2sT4mW8xQ5kL9p]
+        kind:
+          $ref: "#/components/schemas/SupportCaseKind"
+        report_text:
+          type: string
+          description: A ready-to-send report for NEAR Intents support.
+        support_url:
+          type: string
+          format: uri
+          description: The NEAR Intents support channel.
+
+    Token:
+      type: object
+      required: [asset_id, symbol, blockchain, chain_name, decimals, price_usd, contract_address]
+      properties:
+        asset_id:
+          type: string
+          examples: [nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near]
+        symbol:
+          type: string
+        blockchain:
+          type: string
+        chain_name:
+          type: string
+          description: Display name of the chain, for example `Base`.
+          examples: [Base]
+        decimals:
+          type: integer
+        price_usd:
+          type: number
+        contract_address:
+          type: [string, "null"]
+          description: Token contract, or null for a chain's native coin.
+
+    TokenList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Token"
+
+    RouteLimit:
+      type: object
+      required: [object, origin_asset, destination_asset, status, minimum_usd, fee_usd, message, checked_at]
+      properties:
+        object:
+          type: string
+          const: route_limit
+        origin_asset:
+          type: string
+          description: The coin the customer pays with.
+        destination_asset:
+          type: string
+          description: The settlement coin the business receives.
+        status:
+          type: string
+          enum: [available, minimum, unavailable]
+          description: "`available` works from $1; `minimum` works from `minimum_usd`; `unavailable` did not work at any tested amount."
+        minimum_usd:
+          type: [string, "null"]
+          description: The smallest payment in US dollars that works now, or for `unavailable` the minimum NEAR Intents named, if any.
+          examples: ["1000.00"]
+        fee_usd:
+          type: [string, "null"]
+          description: What the customer sends above the amount at the smallest working tested amount, in US dollars.
+        message:
+          type: [string, "null"]
+          description: NEAR Intents' refusal text when the route does not work at $1.
+        checked_at:
+          type: string
+          format: date-time
+
+    RouteLimitList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteLimit"

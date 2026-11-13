@@ -1,0 +1,163 @@
+# Checks and tests for the app, the SDK packages and the WooCommerce plugin on every push and pull request.
+# Actions are pinned to release commits and images to digests, so a moved tag cannot change what runs.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24.22.2"
+
+jobs:
+  app:
+    name: App (typecheck, lint, unit tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # prisma7.config.ts reads DATABASE_URL; generate never connects, so a placeholder is enough.
+      - run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  app-db:
+    name: App (database tests)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.11@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+        env:
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: solverr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d solverr_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: npm run test:db
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:ci-only@localhost:5432/solverr_test
+
+  app-e2e:
+    name: App (browser tests)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.11@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+        env:
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: solverr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d solverr_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:ci-only@localhost:5432/solverr_test
+
+  packages-ts:
+    name: TypeScript SDKs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # embed and x402 are built first: react's tests type-check against embed, and agent imports solverr-x402.
+      - name: Workspace (embed, react, x402, agent)
+        working-directory: packages
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build --workspace embed
+          npm run build --workspace x402
+          for pkg in embed react x402 agent; do
+            (cd "$pkg" && npx tsc --noEmit -p tsconfig.json && npx vitest run)
+          done
+          for pkg in embed react x402 agent; do
+            (cd "$pkg" && npx tsc --noEmit -p tests/tsconfig.json)
+          done
+      - name: Node SDK
+        working-directory: packages/node
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit -p tsconfig.json
+          npx tsc --noEmit -p tests/tsconfig.json
+          npx vitest run
+
+  python:
+    name: Python SDK
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - working-directory: packages/python
+        run: python -I -m unittest discover -s tests -t .
+
+  php:
+    name: PHP SDK and WooCommerce plugin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.3"
+          tools: composer:v2
+          coverage: none
+      - name: PHP SDK
+        working-directory: packages/php
+        run: |
+          composer install --no-interaction --no-progress
+          vendor/bin/phpunit
+      - name: Plugin unit tests
+        working-directory: plugins/woocommerce/tests
+        run: |
+          composer install --no-interaction --no-progress
+          vendor/bin/phpunit
+      - name: Plugin order lock in WordPress and MariaDB
+        run: bash plugins/woocommerce/tests/integration/order-lock.sh

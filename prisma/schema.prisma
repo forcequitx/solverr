@@ -1,0 +1,657 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Mode {
+  live
+  test
+}
+
+enum InvoiceStatus {
+  created
+  awaiting_payment
+  detected
+  processing
+  paid
+  underpaid
+  refunded
+  failed
+  expired
+}
+
+enum QuoteState {
+  active
+  retired
+  final
+}
+
+enum OneClickStatus {
+  PENDING_DEPOSIT
+  KNOWN_DEPOSIT_TX
+  INCOMPLETE_DEPOSIT
+  PROCESSING
+  SUCCESS
+  REFUNDED
+  FAILED
+}
+
+enum SimulatedOutcome {
+  paid
+  underpaid
+  refunded
+  failed
+}
+
+enum TeamRole {
+  owner
+  developer
+  viewer
+}
+
+enum TransferKind {
+  refund
+  payout
+  withdrawal
+}
+
+enum TransferStatus {
+  pending
+  processing
+  completed
+  failed
+  canceled
+}
+
+enum SubscriptionInterval {
+  week
+  month
+}
+
+enum SubscriptionStatus {
+  active
+  canceled
+}
+
+enum WalletKind {
+  evm
+  solana
+  near
+}
+
+// Better Auth core tables (model and field names follow Better Auth's schema).
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions          Session[]
+  accounts          Account[]
+  walletIdentities  WalletIdentity[]
+  teamMemberships   TeamMember[]
+  telegramChats     TelegramChat[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt])
+  @@map("verifications")
+}
+
+/// Better Auth's request counters (`rateLimit.storage: "database"`), shared by every web instance.
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+
+  @@map("auth_rate_limits")
+}
+
+/// Counters of `rateLimit` (lib/api/rate-limit.ts): one fixed window per key, shared by every web instance.
+model RequestWindow {
+  key       String   @id
+  count     Int
+  windowEnd DateTime @map("window_end")
+
+  @@index([windowEnd])
+  @@map("rate_limit_windows")
+}
+
+model WalletIdentity {
+  id          String     @id
+  userId      String     @map("user_id")
+  kind        WalletKind
+  address     String
+  /// The EVM signature was checked by the wallet's contract (ERC-1271/6492); such an address may belong to someone else on another chain.
+  smartWallet Boolean    @default(false) @map("smart_wallet")
+  /// EVM chain whose contract accepted a smart wallet's signature; later sign-ins must use the same chain.
+  chainId     Int?       @map("chain_id")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, address])
+  @@index([userId])
+  @@map("wallet_identities")
+}
+
+model TeamMember {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  userId     String   @map("user_id")
+  role       TeamRole
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([merchantId, userId])
+  @@index([userId])
+  @@map("team_members")
+}
+
+enum WebhookDeliveryStatus {
+  pending
+  delivered
+  failed
+}
+
+enum SupportCaseKind {
+  wrong_chain
+  wrong_coin
+  missing_memo
+  stuck
+  swap_failed
+  not_found
+}
+
+enum SupportCaseStatus {
+  open
+  resolved
+}
+
+model Merchant {
+  id                   String    @id
+  name                 String
+  website              String?
+  payoutChain          String?   @map("payout_chain")
+  payoutAddress        String?   @map("payout_address")
+  payoutVerifiedAt     DateTime? @map("payout_verified_at")
+  settlementAsset      String    @map("settlement_asset")
+  privatePayments      Boolean   @default(false) @map("private_payments")
+  /// Set when the receiving coin is first saved; until then sign-in leads back into setup.
+  setupCompletedAt     DateTime? @map("setup_completed_at")
+  /// The business's one webhook endpoint; it receives live mode events only.
+  webhookUrl           String?   @map("webhook_url")
+  webhookSecretEnc     String?   @map("webhook_secret_enc")
+  /// The secret replaced by the last rotation; deliveries are signed with it too until `webhookPreviousSecretUntil`.
+  webhookPreviousSecretEnc   String?   @map("webhook_previous_secret_enc")
+  webhookPreviousSecretUntil DateTime? @map("webhook_previous_secret_until")
+  /// Set when the endpoint answered 410 Gone; no events are sent or queued until the URL is saved again.
+  webhookDisabledAt    DateTime? @map("webhook_disabled_at")
+  /// Set when the endpoint did not answer at all; no deliveries are sent before then, so a dead endpoint cannot hold up others' webhooks.
+  webhookPausedUntil   DateTime? @map("webhook_paused_until")
+  /// The current `MerchantLogo`; its id is the public image URL, so a new upload gets a new URL.
+  logoId               String?   @map("logo_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  apiKeys            ApiKey[]
+  invoices           Invoice[]
+  idempotencyRecords IdempotencyRecord[]
+  webhookDeliveries  WebhookDelivery[]
+  alerts             Alert[]
+  teamMembers        TeamMember[]
+  paymentLinks       PaymentLink[]
+  creditAccounts     CreditAccount[]
+  transfers          Transfer[]
+  subscriptions      Subscription[]
+  splitRules         SplitRule[]
+  telegramChats      TelegramChat[]
+  logos              MerchantLogo[]
+
+  @@map("merchants")
+}
+
+/// A business's logo, re-encoded on upload to a small WebP; served publicly at /api/v1/logos/:id.
+model MerchantLogo {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  image      Bytes
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@map("merchant_logos")
+}
+
+model ApiKey {
+  id         String    @id
+  merchantId String    @map("merchant_id")
+  keyHash    String    @unique @map("key_hash")
+  last4      String
+  createdAt  DateTime  @default(now()) @map("created_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@map("api_keys")
+}
+
+model Invoice {
+  id                  String        @id
+  merchantId          String        @map("merchant_id")
+  mode                Mode
+  status              InvoiceStatus @default(created)
+  amount              Decimal       @db.Decimal(20, 2)
+  currency            String
+  destinationAsset    String        @map("destination_asset")
+  destinationSymbol   String        @map("destination_symbol")
+  destinationChain    String        @map("destination_chain")
+  destinationDecimals Int           @map("destination_decimals")
+  amountOutBase       String        @map("amount_out_base")
+  orderId             String?       @map("order_id")
+  description         String?
+  customerEmail       String?       @map("customer_email")
+  redirectUrl         String?       @map("redirect_url")
+  metadata            Json?
+  late                Boolean       @default(false)
+  extraPayment        Boolean       @default(false) @map("extra_payment")
+  paidQuoteId         String?       @map("paid_quote_id")
+  paidAt              DateTime?     @map("paid_at")
+  redeemedAt          DateTime?     @map("redeemed_at")
+  paymentLinkId       String?       @map("payment_link_id")
+  creditAccountId     String?       @map("credit_account_id")
+  creditedAt          DateTime?     @map("credited_at")
+  subscriptionId      String?       @map("subscription_id")
+  /// Set once a subscription invoice's pay link was handled: emailed, refused by the mail service, or skipped over the daily limit.
+  payLinkSentAt       DateTime?     @map("pay_link_sent_at")
+  receiptSentAt       DateTime?     @map("receipt_sent_at")
+  telegramNotifiedAt  DateTime?     @map("telegram_notified_at")
+  expiresAt           DateTime      @map("expires_at")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  merchant     Merchant      @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+  quotes       Quote[]
+  supportCases SupportCase[]
+
+  @@index([merchantId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@index([status, paidAt])
+  @@index([payLinkSentAt])
+  @@map("invoices")
+}
+
+model Quote {
+  id                String            @id
+  invoiceId         String            @map("invoice_id")
+  originAsset       String            @map("origin_asset")
+  originSymbol      String            @map("origin_symbol")
+  originChain       String            @map("origin_chain")
+  originDecimals    Int               @map("origin_decimals")
+  depositAddress    String            @map("deposit_address")
+  depositMemo       String?           @map("deposit_memo")
+  amountIn          String            @map("amount_in")
+  amountInFormatted String            @map("amount_in_formatted")
+  minAmountIn       String            @map("min_amount_in")
+  amountInUsd       String?           @map("amount_in_usd")
+  refundTo          String            @map("refund_to")
+  deadline          DateTime
+  timeEstimate      Int               @map("time_estimate")
+  state             QuoteState        @default(active)
+  oneclickStatus    OneClickStatus    @default(PENDING_DEPOSIT) @map("oneclick_status")
+  /// 1Click `updatedAt` of the last applied status; an older response is ignored.
+  oneclickUpdatedAt DateTime?         @map("oneclick_updated_at")
+  depositTxHash    String?           @map("deposit_tx_hash")
+  /// When the customer's wallet reported sending without returning a transaction hash (TON); it counts as a reported payment.
+  walletSentAt      DateTime?         @map("wallet_sent_at")
+  watchUntil        DateTime?         @map("watch_until")
+  nextPollAt        DateTime          @default(now()) @map("next_poll_at")
+  checkoutSeenAt    DateTime?         @map("checkout_seen_at")
+  simulatedOutcome  SimulatedOutcome? @map("simulated_outcome")
+  simulatedAt       DateTime?         @map("simulated_at")
+  correlationId     String            @map("correlation_id")
+  signature         String
+  rawResponse       Json              @map("raw_response")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  invoice Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  events  PaymentEvent[]
+
+  @@index([invoiceId])
+  @@index([state, nextPollAt])
+  @@index([depositTxHash])
+  @@map("quotes")
+}
+
+model PaymentEvent {
+  id              String         @id
+  quoteId         String         @map("quote_id")
+  oneclickStatus  OneClickStatus @map("oneclick_status")
+  depositedAmount String?        @map("deposited_amount")
+  refundedAmount  String?        @map("refunded_amount")
+  refundFee       String?        @map("refund_fee")
+  refundReason    String?        @map("refund_reason")
+  amountOut       String?        @map("amount_out")
+  originTxs       Json           @map("origin_txs")
+  destinationTxs  Json           @map("destination_txs")
+  receivedAt      DateTime       @default(now()) @map("received_at")
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+
+  @@index([quoteId, receivedAt])
+  @@index([originTxs(ops: JsonbPathOps)], type: Gin)
+  @@map("payment_events")
+}
+
+model WebhookDelivery {
+  id           String                @id
+  merchantId   String                @map("merchant_id")
+  eventType    String                @map("event_type")
+  payload      Json
+  status       WebhookDeliveryStatus @default(pending)
+  attempts     Int                   @default(0)
+  responseCode Int?                  @map("response_code")
+  lastError    String?               @map("last_error")
+  nextRetryAt  DateTime?             @default(now()) @map("next_retry_at")
+  deliveredAt  DateTime?             @map("delivered_at")
+  createdAt    DateTime              @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRetryAt])
+  @@index([merchantId, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("webhook_deliveries")
+}
+
+model Alert {
+  id         String    @id
+  merchantId String    @map("merchant_id")
+  kind       String
+  message    String
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("alerts")
+}
+
+model SupportCase {
+  id        String            @id
+  invoiceId String?           @map("invoice_id")
+  quoteId   String?           @map("quote_id")
+  txHash    String?           @map("tx_hash")
+  chain     String?
+  kind      SupportCaseKind
+  status    SupportCaseStatus @default(open)
+  report    Json
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@map("support_cases")
+}
+
+model PaymentLink {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  mode       Mode
+  title      String
+  /// Null means the customer chooses the amount (tips and donations).
+  amount     Decimal? @db.Decimal(20, 2)
+  currency   String
+  /// Where the checkout sends the customer after paying; the business website when empty.
+  redirectUrl String? @map("redirect_url")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, createdAt(sort: Desc)])
+  @@map("payment_links")
+}
+
+model CreditAccount {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  tokenHash  String   @unique @map("token_hash")
+  /// USD balance available for per-call charges.
+  balance    Decimal  @default(0) @db.Decimal(20, 6)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant      @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+  usage    CreditUsage[]
+
+  @@index([merchantId])
+  @@map("credit_accounts")
+}
+
+model CreditUsage {
+  id              String   @id
+  creditAccountId String   @map("credit_account_id")
+  amount          Decimal  @db.Decimal(20, 6)
+  description     String?
+  /// Set when the charge was given back (the paid request failed); a charge is refunded at most once.
+  refundedAt      DateTime? @map("refunded_at")
+  /// The refund of a credit top-up that took these credits back; they are given back if that refund fails.
+  refundTransferId String?  @unique @map("refund_transfer_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  creditAccount CreditAccount @relation(fields: [creditAccountId], references: [id], onDelete: Restrict)
+
+  @@index([creditAccountId, createdAt(sort: Desc)])
+  @@map("credit_usage")
+}
+
+/// A refund, payout or Earn vault withdrawal the merchant sends from their own wallet (1Click quote with the merchant as payer).
+model Transfer {
+  id               String         @id
+  merchantId       String         @map("merchant_id")
+  kind             TransferKind
+  status           TransferStatus @default(pending)
+  invoiceId        String?        @map("invoice_id")
+  /// The payment (quote) a refund returns; each payment has its own refund limit.
+  quoteId          String?        @map("quote_id")
+  batchId          String?        @map("batch_id")
+  /// Set only on a split payout: its share of the invoice in basis points, so refunds can resize it.
+  splitShareBps    Int?           @map("split_share_bps")
+  /// Amount of the merchant's settlement coin to send, as a decimal string.
+  amount           String
+  sourceAsset      String         @map("source_asset")
+  destinationAsset String         @map("destination_asset")
+  recipient        String
+  depositAddress   String?        @map("deposit_address")
+  depositMemo      String?        @map("deposit_memo")
+  amountInBase     String?        @map("amount_in_base")
+  /// One transaction completes one transfer, so a hash recorded for an earlier transfer cannot complete another.
+  txHash           String?        @unique @map("tx_hash")
+  /// When the merchant reported `txHash`, and the payout wallet that sent it; a direct transfer completes only once the worker finds it on-chain.
+  txReportedAt     DateTime?      @map("tx_reported_at")
+  txSender         String?        @map("tx_sender")
+  correlationId    String?        @map("correlation_id")
+  oneclickStatus   OneClickStatus? @map("oneclick_status")
+  nextPollAt       DateTime?      @map("next_poll_at")
+  failureReason    String?        @map("failure_reason")
+  rawQuote         Json?          @map("raw_quote")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+
+  @@index([merchantId, kind, createdAt(sort: Desc)])
+  @@index([status, nextPollAt])
+  @@index([invoiceId])
+  @@index([quoteId])
+  @@map("transfers")
+}
+
+model Subscription {
+  id            String               @id
+  merchantId    String               @map("merchant_id")
+  customerEmail String               @map("customer_email")
+  amount        Decimal              @db.Decimal(20, 2)
+  currency      String
+  interval      SubscriptionInterval
+  description   String?
+  status        SubscriptionStatus   @default(active)
+  nextInvoiceAt DateTime             @map("next_invoice_at")
+  /// Set while the due invoice could not be created; the worker tries again then, and `nextInvoiceAt` keeps the billing schedule.
+  invoiceRetryAt DateTime?           @map("invoice_retry_at")
+  createdAt     DateTime             @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextInvoiceAt])
+  @@index([merchantId, createdAt(sort: Desc)])
+  @@map("subscriptions")
+}
+
+/// Share of every paid invoice that becomes a pending payout to `recipient`, in the merchant's settlement coin.
+model SplitRule {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  label      String
+  recipient  String
+  /// Network the recipient address was given for (the payout network when the rule was added); payouts go only on it.
+  chain      String
+  /// Share in basis points (100 = 1%); the total of a merchant's rules is at most 10000.
+  shareBps   Int      @map("share_bps")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@map("split_rules")
+}
+
+/// A Telegram chat linked to a merchant; it can create links and invoices and receives paid notifications.
+model TelegramChat {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  chatId     String   @unique @map("chat_id")
+  /// The teammate who linked the chat; the chat stops working when they leave the business.
+  userId     String   @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([userId])
+  @@map("telegram_chats")
+}
+
+model ServiceHealth {
+  id                  String   @id
+  healthy             Boolean  @default(true)
+  consecutiveFailures Int      @default(0) @map("consecutive_failures")
+  checkedAt           DateTime @default(now()) @map("checked_at")
+
+  @@map("service_health")
+}
+
+enum RouteStatus {
+  available
+  minimum
+  unavailable
+}
+
+/// NEAR Intents' latest answer for paying a settlement coin with an origin coin, refreshed by the worker from dry quotes.
+model RouteLimit {
+  originAsset      String      @map("origin_asset")
+  destinationAsset String      @map("destination_asset")
+  status           RouteStatus
+  /// USD floor by status: null when `available` ($1 worked); for `minimum`, the minimum NEAR Intents named or else the tested
+  /// amount that worked; for `unavailable`, the named minimum that still failed when tested, or null when none was named.
+  minimumUsd       Decimal?    @map("minimum_usd") @db.Decimal(20, 2)
+  /// What the payer sends above the amount at the smallest working tested amount, in USD.
+  feeUsd           Decimal?    @map("fee_usd") @db.Decimal(20, 6)
+  /// NEAR Intents' refusal text when the route does not work at the smallest tested amount.
+  message          String?
+  checkedAt        DateTime    @map("checked_at")
+
+  @@id([originAsset, destinationAsset])
+  @@index([destinationAsset])
+  @@map("route_limits")
+}
+
+model IdempotencyRecord {
+  id           String   @id
+  merchantId   String   @map("merchant_id")
+  key          String
+  requestHash  String   @map("request_hash")
+  statusCode   Int      @map("status_code")
+  responseBody Json     @map("response_body")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([merchantId, key])
+  @@index([createdAt])
+  @@map("idempotency_records")
+}

@@ -1,0 +1,65 @@
+---
+title: Payouts
+icon: send
+description: Send the coin you receive from your payout wallet to any address, one at a time or up to 200 at once, from a CSV in the dashboard or with the API.
+---
+
+A payout sends the coin you receive from your payout wallet to any address, such as a supplier, a contractor or a second wallet of yours. Solverr prepares each transfer and you approve it in your wallet, so you need a verified payout wallet. The recipient can receive a different coin on a different chain; NEAR Intents converts it on the way.
+
+## Create payouts from a CSV
+
+1. Open **Dashboard → Refunds & payouts**.
+2. Under **New payouts**, enter one payout per line in the form `recipient,asset_id,amount`:
+
+```text
+recipient,asset_id,amount
+0x1111111111111111111111111111111111111111,nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near,25.00
+0x2222222222222222222222222222222222222222,nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near,40.00
+```
+
+3. Select **Create payouts**.
+4. Open each pending payout, connect your payout wallet, select **Send from your wallet**, and approve the transfer in your wallet.
+
+Every row is checked before any payout is created. One wrong row stops the whole batch, and the error message names that row.
+
+### CSV columns
+
+| Column | Meaning |
+|---|---|
+| `recipient` | The address that receives the payout, checked against the format of the coin's chain |
+| `asset_id` | The coin the recipient receives, from [the tokens list](/docs/payments/chains-and-coins#which-coins) |
+| `amount` | How much of **the coin you receive** to send, as a decimal string |
+
+The header line is optional. A batch has at most 200 rows, and all payouts of one batch share a `batch_id`.
+
+## Create a payout with the API
+
+`POST /api/v1/payouts` creates one payout per call:
+
+```bash
+curl https://your-solverr-host/api/v1/payouts \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recipient": "0x1111111111111111111111111111111111111111",
+    "asset_id": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+    "amount": "25.00"
+  }'
+```
+
+The response is a payout with `"status": "pending"` and a `sign_url`. Nothing is sent until you open `sign_url` and approve the transfer from your wallet. `GET /api/v1/payouts` lists your payouts, newest first, and `GET /api/v1/payouts/:id` returns one. To cancel a payout that was not sent, select **Cancel transfer** on its page or send `POST /api/v1/payouts/:id/cancel`; you get a `payout.canceled` webhook. `amount` can have at most as many decimals as the coin you receive, for example 6 for USDC.
+
+To create many payouts in one call, send up to 200 to `POST /api/v1/payouts/batch` as `{ "payouts": [ … ] }`, each with the same three fields. The rows are checked as in the CSV form. The response is a `payout_batch` object with the batch `id` and the pending payouts in `data`.
+
+## How a payout is sent
+
+- **Same coin.** If `asset_id` is the coin you receive, your wallet sends it straight to the recipient.
+- **Different coin.** NEAR Intents swaps it. Your wallet sends `amount` of your coin to a one-time deposit address, and the recipient receives the converted amount minus the swap fee. Any temporary NEAR Intents minimum on that route applies.
+- **When it arrives.** The payout becomes `completed`, and you get a `payout.completed` webhook.
+- **If the swap does not go through.** Your coin returns to your wallet, the payout becomes `failed` with a `failure_reason`, and you get a dashboard alert and a `payout.failed` webhook.
+
+Payouts use the same statuses as [refunds](/docs/payments/refunds#statuses): `pending`, `processing`, `completed`, `failed` and `canceled`. While a payout or refund is being sent, the payout wallet cannot be changed. Record or cancel the transfer first.
+
+<Callout type="warn">
+A payout to a wrong address cannot be reversed. Solverr checks the address format for the chain but cannot know whether the address belongs to the right person. Check every recipient before you approve.
+</Callout>

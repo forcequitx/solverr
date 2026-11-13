@@ -1,0 +1,124 @@
+---
+title: Credits
+icon: coins
+description: "Let an AI agent prepay a USD credit balance once and spend it per call: create top-ups, accept credit tokens in the paywall, or charge credits yourself."
+---
+
+Credits let an agent prepay a USD balance once and spend it per call. Paying on-chain for every request is slow and costs a network fee each time, which adds up over many small calls. With credits, your paywall deducts each call's price from the prepaid balance tied to the agent's credit token.
+
+## How credits work
+
+1. Your server creates a top-up for an amount in USD. Solverr returns a new credit account with its token, and an invoice that funds it.
+2. You give the token to the agent's owner. The invoice is paid on its `checkout_url` like any other invoice.
+3. When the invoice is paid, its amount is added to the credit balance.
+4. The agent calls your paywalled route with an `Authorization: Bearer solverr_credit_…` header.
+5. Your paywall, set up with `credits: true`, deducts the route's price and answers with your data and a `Solverr-Credit-Balance` header.
+
+Credits are kept in USD with 6 decimals. **Dashboard → Agents** lists your credit accounts with their balances. If you refund a top-up, its credits come off the balance in the same step; a refund larger than what the agent has left is refused.
+
+## 1. Create a top-up
+
+Send the amount to the top-up endpoint from your server:
+
+```bash
+curl https://your-solverr-host/api/v1/credits/topup \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":"10.00","currency":"USD"}'
+```
+
+```json
+{
+  "credit_account": {
+    "id": "cra_9pL3vN7rB2sT4mW8xQ5k",
+    "object": "credit_account",
+    "token": "solverr_credit_…",
+    "balance": "0.000000",
+    "currency": "USD"
+  },
+  "invoice": {
+    "id": "inv_7h3K9dWq2LmN4pRt6vXy",
+    "object": "invoice",
+    "status": "created",
+    "amount": "10.00",
+    "currency": "USD",
+    "description": "Agent credits top-up",
+    "checkout_url": "https://your-solverr-host/pay/inv_7h3K9dWq2LmN4pRt6vXy"
+  }
+}
+```
+
+The example shortens `invoice`. The real answer has the full invoice object.
+
+<Callout type="warn">
+The token is returned only once, when the account is created, because Solverr stores only a hash of it. Anyone with the token can spend the balance on your routes, so handle it like a password.
+</Callout>
+
+`amount` is a USD decimal string with up to 2 decimals, and `currency` must be `USD`. The top-up endpoint needs your API key, so your server calls it, not the agent.
+
+## 2. Top up the same account again
+
+To add to an existing balance, send its `credit_account_id` with the top-up. The answer then has no new token, and the agent keeps using the one it has.
+
+```bash
+curl https://your-solverr-host/api/v1/credits/topup \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":"25.00","currency":"USD","credit_account_id":"cra_9pL3vN7rB2sT4mW8xQ5k"}'
+```
+
+## 3. Accept credits on a route
+
+Add `credits: true` to the paywall options:
+
+```ts
+import { paywall } from "solverr-x402";
+
+export const GET = paywall(
+  {
+    price: "0.05",
+    currency: "USD",
+    credits: true,
+    apiKey: process.env.SOLVERR_SECRET_KEY!,
+    baseUrl: process.env.SOLVERR_URL!,
+  },
+  async () => Response.json({ data: "premium" }),
+);
+```
+
+The agent then calls the route with its credit token as the bearer token:
+
+```bash
+curl https://api.example.com/api/premium \
+  -H "Authorization: Bearer solverr_credit_…"
+```
+
+<Callout type="warn">
+Routes that accept credits must be priced in USD. With `credits: true` and a price in EUR or INR, the paywall throws an error when it is created.
+</Callout>
+
+## When the balance is too low
+
+When the balance cannot cover a call, the paywall answers `402` with a fresh payment request, as for an unpaid call. Its `PAYMENT-RESPONSE` header has `success: false` with `errorReason` set to `insufficient_credit`. The agent can pay for that one call on-chain, or its owner can top up the balance.
+
+## Charge credits yourself
+
+Without the middleware, deduct from a balance with the charge endpoint:
+
+```bash
+curl https://your-solverr-host/api/v1/credits/charge \
+  -H "Authorization: Bearer sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"solverr_credit_…","amount":"0.05","description":"GET /api/premium"}'
+```
+
+```json
+{ "id": "cru_…", "object": "credit_charge", "amount": "0.050000", "balance": "9.950000", "currency": "USD" }
+```
+
+If the request the charge paid for fails, give the charge back with `POST /api/v1/credits/charges/{id}/refund`. A charge can be refunded once; a second refund returns `409`. The middleware does this for you when your handler throws or answers 400 or higher.
+
+- `amount` can have up to 6 decimals, which allows prices below a cent.
+- If you send `currency`, it must be `USD`.
+- A token from another account returns `404`, and a balance that is too low returns `409 insufficient_credit` without deducting anything.
+- Each API key can make up to 600 charges per minute.
